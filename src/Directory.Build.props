@@ -1,0 +1,23 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>preview</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>1.0.1</Version>
+    <Authors>iyulab</Authors>
+    <Company>Iyulab Corporation</Company>
+    <PackageTags>iyulab</PackageTags>
+    <PackageIcon>logo.png</PackageIcon>
+    <Owners>iyulab-rnd</Owners>
+    <Copyright>Copyright (c) Iyulab Corporation 2024.</Copyright>
+    <PackageProjectUrl>https://github.com/iyulab-rnd/DollarSignEngine</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/iyulab-rnd/DollarSignEngine</RepositoryUrl>
+    <PackageIconUrl>https://raw.githubusercontent.com/iyulab-rnd/public/main/images/iyulab_128.png</PackageIconUrl>
+    <PackageTags>C#,dynamic-evaluation,expression-interpolation,runtime-evaluation,script-execution</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="../logo.png" Pack="true" PackagePath="" />
+    <None Include="../../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

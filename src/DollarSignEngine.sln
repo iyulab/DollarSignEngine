@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DollarSignEngine", "DollarSignEngine\DollarSignEngine.csproj", "{3314E4E1-ED0C-4615-AB35-38F8A0044FF8}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DollarSignEngine.Tests", "DollarSignEngine.Tests\DollarSignEngine.Tests.csproj", "{9FACBE26-CB28-43F2-830C-A9CE58DE9D94}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3314E4E1-ED0C-4615-AB35-38F8A0044FF8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3314E4E1-ED0C-4615-AB35-38F8A0044FF8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3314E4E1-ED0C-4615-AB35-38F8A0044FF8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3314E4E1-ED0C-4615-AB35-38F8A0044FF8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9FACBE26-CB28-43F2-830C-A9CE58DE9D94}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9FACBE26-CB28-43F2-830C-A9CE58DE9D94}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9FACBE26-CB28-43F2-830C-A9CE58DE9D94}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9FACBE26-CB28-43F2-830C-A9CE58DE9D94}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {8A6EE225-7437-4CBB-8529-66C99A613C4D}
+	EndGlobalSection
+EndGlobal
