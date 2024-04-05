@@ -27,7 +27,7 @@ namespace DollarSignEngine
         /// <param name="parameters">An optional dictionary of parameters to be injected into the expression. Each key-value pair represents a variable name and its value.</param>
         /// <returns>A Task that represents the asynchronous operation, resulting in the expression's evaluated string value.</returns>
         /// <exception cref="DollarSignEngineException">Thrown when the expression cannot be compiled or an exception occurs during evaluation.</exception>
-        public static async Task<string> EvalAsync(string expression, IDictionary<string, object>? parameters = null)
+        public static async Task<string> EvalAsync(string expression, IDictionary<string, object?>? parameters = null)
         {
             try
             {
@@ -65,7 +65,7 @@ namespace DollarSignEngine
         {
             if (parameter is IDictionary)
             {
-                return await EvalAsync(expression, parameter as IDictionary<string, object>);
+                return await EvalAsync(expression, parameter as IDictionary<string, object?>);
             }
 
             var dic = new Dictionary<string, object?>();
@@ -75,7 +75,7 @@ namespace DollarSignEngine
                 dic.Add(prop.Name, prop.GetValue(parameter));
             }
 
-            return await EvalAsync(expression, dic as IDictionary<string, object>);
+            return await EvalAsync(expression, dic as IDictionary<string, object?>);
         }
 
         private static readonly Dictionary<string, string> typeAliases = new()
@@ -204,7 +204,7 @@ dynamic {functionName}()
             }
         }
 
-        public static string BuildCsScript(string expression, IDictionary<string, object>? parameters)
+        public static string BuildCsScript(string expression, IDictionary<string, object?>? parameters)
         {
             var declarations = new StringBuilder();
             var getFunctions = new StringBuilder();
