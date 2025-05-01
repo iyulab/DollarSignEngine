@@ -9,7 +9,7 @@ The DollarSignEngine is a robust C# library designed to simplify the process of 
 ## Features
 
 - **Dynamic Expression Evaluation:** Evaluate C# expressions dynamically at runtime, with support for interpolation and complex logic.
-- **Parameter Injection:** Easily pass parameters into expressions for dynamic evaluation.
+- **Flexible Parameter Injection:** Easily pass parameters into expressions using dictionaries, anonymous objects, or regular C# objects.
 - **Support for Complex Types:** Effortlessly handle complex data types, including custom objects, collections, and more.
 - **Comprehensive Error Handling:** Provides detailed exceptions for compilation and runtime errors to ease debugging.
 
@@ -22,37 +22,80 @@ dotnet add package DollarSignEngine
 ```
 
 ## Usage
+
 Below are some examples of how to use the DollarSignEngine to evaluate expressions dynamically.
 
-**Evaluating Simple Expressions**
+### Basic Interpolation
+
 ```csharp
-var result = await DollarSign.EvalAsync("1 + 1");
-Console.WriteLine(result); // Outputs: 2
+// Simple interpolation with current date
+var result = await DollarSign.EvalAsync("Today is {DateTime.Now:yyyy-MM-dd}");
+Console.WriteLine(result); // Outputs: Today is 2023-05-01 (based on current date)
+
+// With parameters using anonymous object
+var name = "John";
+var result = await DollarSign.EvalAsync("Hello, {name}!", new { name });
+Console.WriteLine(result); // Outputs: Hello, John!
+
+// With parameters using dictionary (for backward compatibility)
+var parameters = new Dictionary<string, object?> { { "name", "John" } };
+var result = await DollarSign.EvalAsync("Hello, {name}!", parameters);
+Console.WriteLine(result); // Outputs: Hello, John!
 ```
 
-**Interpolating Strings with Parameters**
+### Using Custom Objects
+
 ```csharp
-var parameters = new Dictionary<string, object>
+// Using a class directly
+public class User
 {
-    { "name", "John" }
+    public string Username { get; set; } = string.Empty;
+    public int Age { get; set; }
+}
+
+var user = new User { Username = "Alice", Age = 30 };
+var result = await DollarSign.EvalAsync("User: {Username}, Age: {Age}", user);
+Console.WriteLine(result); // Outputs: User: Alice, Age: 30
+
+// Using anonymous types with nested properties
+var person = new { 
+    Name = "Jane", 
+    Address = new { City = "New York", Country = "USA" } 
 };
-var result = await DollarSign.EvalAsync("Hello, {name}", parameters);
-Console.WriteLine(result); // Outputs: Hello, John
+var result = await DollarSign.EvalAsync("Person: {Name} from {Address.City}", person);
+Console.WriteLine(result); // Outputs: Person: Jane from New York
 ```
 
-**Handling Complex Data Types**
+### Conditional Logic
+
 ```csharp
-var person = new { FirstName = "Jane", LastName = "Doe" };
-var parameters = new Dictionary<string, object>
-{
-    { "person", person }
-};
-var result = await DollarSign.EvalAsync("Person: {person.FirstName} {person.LastName}", parameters);
-Console.WriteLine(result); // Outputs: Person: Jane Doe
+var age = 20;
+var result = await DollarSign.EvalAsync("You are {(age >= 18 ? \"adult\" : \"minor\")}.", new { age });
+Console.WriteLine(result); // Outputs: You are adult.
+
+var score = 85;
+var result = await DollarSign.EvalAsync("Grade: {(score >= 90 ? \"A\" : score >= 80 ? \"B\" : \"C\")}.", new { score });
+Console.WriteLine(result); // Outputs: Grade: B.
 ```
 
-More usage can be found in the test code.
-[Show Tests](src/DollarSignEngine.Tests/DollarSignEngineTests.cs)
+### Working with Collections
 
-## Contributing
-Contributions are welcome! If you have an idea for improvement or have found a bug, please feel free to create an issue or submit a pull request.
+```csharp
+var numbers = new List<int> { 1, 2, 3, 4, 5 };
+var result = await DollarSign.EvalAsync("Total sum: {numbers.Sum()}. Items count: {numbers.Count}", new { numbers });
+Console.WriteLine(result); // Outputs: Total sum: 15. Items count: 5
+
+var settings = new Dictionary<string, string> { { "Theme", "Dark" }, { "FontSize", "12" } };
+var result = await DollarSign.EvalAsync("Theme: {settings[\"Theme\"]}, Font Size: {settings[\"FontSize\"]}", new { settings });
+Console.WriteLine(result); // Outputs: Theme: Dark, Font Size: 12
+```
+
+## Project Structure
+
+The DollarSign engine is organized into partial classes to make the codebase more maintainable:
+
+- **DollarSign.Core.cs**: Contains the main evaluation methods
+- **DollarSign.Helpers.cs**: Helper methods for parameter conversion and handling
+- **DollarSign.Types.cs**: Type conversion and handling functionality
+- **DollarSignEngineException.cs**: Exception class for error handling
+- **DollarSignOption.cs**: Configuration options for the engine
