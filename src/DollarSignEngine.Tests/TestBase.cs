@@ -1,18 +1,13 @@
 ﻿using Xunit.Abstractions;
 
-namespace DollarSignEngine.Tests;
-
 public class TestBase : IDisposable
 {
-    private readonly TextWriter _originalConsoleOut;
     protected readonly ITestOutputHelper _output;
+    private readonly TextWriter _originalConsoleOut;
 
     public TestBase(ITestOutputHelper output)
     {
         _output = output;
-        TestOutputHelperExtensions.SetOutputHelper(output);
-
-        // Redirect console output to test output
         _originalConsoleOut = Console.Out;
         Console.SetOut(new TestOutputTextWriter(output));
     }
