@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.Scripting;
 
@@ -11,41 +12,85 @@ namespace DollarSignEngine;
 /// </summary>
 public static partial class DollarSign
 {
-    /// <summary>
-    /// Evaluates a C# expression asynchronously and returns the result.
-    /// </summary>
     private static async Task<object?> EvaluateExpressionAsync(string expression, object? parameter, DollarSignOption option)
     {
         Log.Debug($"Evaluating expression: {expression}", option);
         Log.Debug($"With parameter type: {parameter?.GetType().Name ?? "null"}", option);
+
+        // Check if the expression is a simple method call (e.g., "Hello()")
+        bool isMethodCall = Regex.IsMatch(expression, @"^[a-zA-Z_][a-zA-Z0-9_]*\s*\(\s*\)$");
 
         // Try variable resolver callback if provided
         if (option.VariableResolver != null && option.PreferCallbackResolution)
         {
             try
             {
-                var value = option.VariableResolver(expression, parameter);
+                string? resolverExpression = expression;
+                if (IsLinqExpression(expression) && TryGetCollectionTarget(expression, out var collectionName))
+                {
+                    resolverExpression = collectionName;
+                }
+                else if (IsSimpleIdentifier(expression) || isMethodCall)
+                {
+                    resolverExpression = expression;
+                }
+                else if (IsPropertyChain(expression, out var objName, out _))
+                {
+                    resolverExpression = objName;
+                }
+                else if (IsArrayIndexAccess(expression, out var arrayName, out _))
+                {
+                    resolverExpression = arrayName;
+                }
+
+                var value = option.VariableResolver(resolverExpression, parameter);
                 if (value != null)
                 {
-                    Log.Debug($"Callback resolver succeeded: {value}", option);
-                    return value;
+                    Log.Debug($"Callback resolver succeeded for {resolverExpression}: {value}", option);
+
+                    if (resolverExpression == expression)
+                    {
+                        return value;
+                    }
+
+                    if (IsLinqExpression(expression) && TryGetCollectionTarget(expression, out var targetName) && targetName == resolverExpression)
+                    {
+                        if (TryHandleLinqOperationDirectly(expression, value, out var linqResult))
+                        {
+                            Log.Debug($"Direct LINQ operation succeeded: {linqResult}", option);
+                            return linqResult;
+                        }
+                    }
+
+                    var paramDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    { resolverExpression, value }
+                };
+
+                    if (parameter != null)
+                    {
+                        var additionalParams = ExtractPropertiesToDictionary(parameter);
+                        foreach (var kvp in additionalParams)
+                        {
+                            paramDict.TryAdd(kvp.Key, kvp.Value);
+                        }
+                    }
+
+                    var globals = new ScriptGlobals(paramDict);
+                    Log.Debug($"Using ScriptGlobals with variable: {resolverExpression}", option);
+                    return await CompileAndEvaluateExpressionAsync(expression, globals, option);
                 }
             }
             catch (Exception ex)
             {
                 Log.Debug($"Callback resolver failed: {ex.Message}", option);
-
                 if (option.StrictParameterAccess)
-                {
                     throw;
-                }
             }
         }
 
-        // For direct property access optimizations (when enabled)
         if (parameter != null && option.OptimizeCollectionAccess)
         {
-            // Simple property access optimization
             if (IsSimpleIdentifier(expression))
             {
                 if (TryGetPropertyValue(parameter, expression, out var value))
@@ -55,7 +100,6 @@ public static partial class DollarSign
                 }
             }
 
-            // Property chain optimization (obj.prop)
             if (IsPropertyChain(expression, out var objName, out var propName))
             {
                 if (TryGetPropertyValue(parameter, objName, out var objValue) && objValue != null)
@@ -68,7 +112,6 @@ public static partial class DollarSign
                 }
             }
 
-            // Array/Collection indexer optimization (arr[0], dict["key"])
             if (IsArrayIndexAccess(expression, out var arrayName, out var indexOrKey))
             {
                 if (TryGetPropertyValue(parameter, arrayName, out var collection) && collection != null)
@@ -81,10 +124,8 @@ public static partial class DollarSign
                 }
             }
 
-            // Try to handle LINQ expressions directly where possible
             if (IsLinqExpression(expression))
             {
-                // Try to get the target collection
                 string collectionName;
                 if (TryGetCollectionTarget(expression, out collectionName))
                 {
@@ -98,13 +139,34 @@ public static partial class DollarSign
                     }
                 }
             }
+
+            // Handle method calls directly
+            if (isMethodCall)
+            {
+                string methodName = expression.Substring(0, expression.IndexOf('('));
+                try
+                {
+                    var methodInfo = parameter.GetType().GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance);
+                    if (methodInfo != null)
+                    {
+                        var result = methodInfo.Invoke(parameter, null);
+                        Log.Debug($"Direct method invocation succeeded: {result}", option);
+                        return result;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug($"Direct method invocation failed: {ex.Message}", option);
+                }
+            }
         }
 
-        // Use Roslyn script evaluation for all expressions
+        // Use Roslyn script evaluation with adjusted expression for method calls
         try
         {
             Log.Debug($"Using Roslyn evaluation for: {expression}", option);
-            return await CompileAndEvaluateExpressionAsync(expression, parameter, option);
+            string scriptExpression = isMethodCall ? $"__parameter.{expression}" : expression;
+            return await CompileAndEvaluateExpressionAsync(scriptExpression, parameter, option);
         }
         catch (Exception ex)
         {
@@ -117,9 +179,6 @@ public static partial class DollarSign
         }
     }
 
-    /// <summary>
-    /// Compiles and evaluates a C# expression using Roslyn with enhanced type handling.
-    /// </summary>
     private static async Task<object?> CompileAndEvaluateExpressionAsync(string expression, object? parameter, DollarSignOption option)
     {
         // Set up script options with necessary references and imports
@@ -131,11 +190,24 @@ public static partial class DollarSign
             return await CSharpScript.EvaluateAsync<object>(expression, scriptOptions);
         }
 
-        // Extract parameter properties to a dictionary
-        var paramDict = ExtractPropertiesToDictionary(parameter);
+        // If parameter is already a ScriptGlobals, use it directly
+        if (parameter is ScriptGlobals globals1)
+        {
+            try
+            {
+                return await CSharpScript.EvaluateAsync<object>(expression, scriptOptions, globals1);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"Direct evaluation with ScriptGlobals failed: {ex.Message}", option);
+                throw;
+            }
+        }
 
-        // Create the script globals
-        var globals = new ScriptGlobals(paramDict);
+        // Create ScriptGlobals with parameter properties
+        var paramDict = ExtractPropertiesToDictionary(parameter);
+        paramDict["__parameter"] = parameter; // Add parameter for method access
+        var globals2 = new ScriptGlobals(paramDict);
 
         try
         {
@@ -143,7 +215,7 @@ public static partial class DollarSign
             string directScript = expression;
 
             // Try direct evaluation first with globals object accessible
-            return await CSharpScript.EvaluateAsync<object>(directScript, scriptOptions, globals);
+            return await CSharpScript.EvaluateAsync<object>(directScript, scriptOptions, globals2);
         }
         catch (Exception ex)
         {
@@ -160,16 +232,18 @@ public static partial class DollarSign
                 scriptBuilder.AppendLine("using System.Collections;");
                 scriptBuilder.AppendLine("using System.Collections.Generic;");
 
-                // Define the globals variable explicitly
-                scriptBuilder.AppendLine($"var globals = (dynamic)@globals;");
+                // Define a unique globals variable for the script
+                scriptBuilder.AppendLine($"var _scriptGlobals = (dynamic)@globals;");
 
-                // Define each parameter as a variable
+                // Define the parameter object for method access
+                scriptBuilder.AppendLine($"var __parameter = _scriptGlobals[\"__parameter\"];");
+
+                // Define each property as a variable
                 foreach (var param in paramDict)
                 {
-                    if (param.Key != null && IsSafeIdentifier(param.Key))
+                    if (param.Key != null && IsSafeIdentifier(param.Key) && param.Key != "__parameter")
                     {
-                        // Access values via globals indexer to preserve type information
-                        scriptBuilder.AppendLine($"var {param.Key} = globals[\"{param.Key}\"];");
+                        scriptBuilder.AppendLine($"var {param.Key} = _scriptGlobals[\"{param.Key}\"];");
                     }
                 }
 
@@ -180,16 +254,15 @@ public static partial class DollarSign
                 Log.Debug($"Alternative script: {script}", option);
 
                 // Evaluate with the globals object passed as a parameter
-                return await CSharpScript.EvaluateAsync<object>(script, scriptOptions, globals);
+                return await CSharpScript.EvaluateAsync<object>(script, scriptOptions, globals2);
             }
             catch (Exception fallbackEx)
             {
                 Log.Debug($"Alternative evaluation failed: {fallbackEx.Message}", option);
 
-                // Last resort: check if it's a simple property or collection access we can handle directly
+                // Last resort: check if it's a simple property or collection access
                 if (parameter != null)
                 {
-                    // Try simple indexer access as last resort using our optimized handlers
                     if (IsArrayIndexAccess(expression, out var arrName, out var idxKey))
                     {
                         if (TryGetPropertyValue(parameter, arrName, out var coll) && coll != null)

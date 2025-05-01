@@ -22,6 +22,7 @@ The DollarSignEngine is a robust C# library designed to simplify the process of 
 - **Dynamic Expression Evaluation:** Evaluate C# expressions dynamically at runtime, with support for interpolation and complex logic.
 - **Flexible Parameter Injection:** Easily pass parameters into expressions using dictionaries, anonymous objects, or regular C# objects.
 - **Support for Complex Types:** Effortlessly handle complex data types, including custom objects, collections, and more.
+- **Method Invocation:** Call methods on parameter objects within expressions, such as `{obj.Method()}` or `${obj.Method()}`, consistent with C# interpolation syntax. *(Added)*
 - **Format Specifiers & Alignment:** Full support for C# format specifiers and alignment in interpolated expressions.
 - **Custom Variable Resolution:** Provide custom variable resolvers for advanced use cases.
 - **Multiple Syntax Options:** Support for both standard C# interpolation `{expression}` and dollar-sign `${expression}` syntax.
@@ -78,6 +79,26 @@ var person = new {
 };
 var result = await DollarSign.EvalAsync("Person: {Name} from {Address.City}", person);
 Console.WriteLine(result); // Outputs: Person: Jane from New York
+
+// Calling a method on a custom object
+public class Greeter
+{
+    public string Name { get; set; } = string.Empty;
+
+    public string Hello()
+    {
+        return $"hello, {Name}";
+    }
+}
+
+var greeter = new Greeter { Name = "Bob" };
+var options = new DollarSignOption { SupportDollarSignSyntax = true };
+var result = await DollarSign.EvalAsync("Greeting: ${Hello()}", greeter, options);
+Console.WriteLine(result); // Outputs: Greeting: hello, Bob
+
+// Without dollar sign syntax, the expression is treated as literal
+var standardResult = await DollarSign.EvalAsync("Greeting: ${Hello()}", greeter);
+Console.WriteLine(standardResult); // Outputs: Greeting: ${Hello()}
 ```
 
 ### Format Specifiers and Alignment
@@ -142,6 +163,11 @@ Console.WriteLine(result);
 var standardResult = await DollarSign.EvalAsync("{ \"user\": { \"name\": \"{name}\", \"age\": {age} } }", user);
 Console.WriteLine(standardResult); 
 // Outputs: { "user": { "name": "Alice", "age": 30 } }
+
+// Example with method invocation
+var greeter = new Greeter { Name = "Bob" };
+var methodResult = await DollarSign.EvalAsync("Greeting: ${greeter.Hello()}", new { greeter }, options);
+Console.WriteLine(methodResult); // Outputs: Greeting: hello, Bob
 ```
 
 ### Custom Variable Resolution

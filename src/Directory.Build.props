@@ -3,7 +3,7 @@
     <LangVersion>preview</LangVersion>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>1.0.2</Version>
+    <Version>1.1.0</Version>
     <Authors>iyulab</Authors>
     <Company>Iyulab Corporation</Company>
     <PackageTags>iyulab</PackageTags>
@@ -13,7 +13,7 @@
     <PackageProjectUrl>https://github.com/iyulab-rnd/DollarSignEngine</PackageProjectUrl>
     <RepositoryUrl>https://github.com/iyulab-rnd/DollarSignEngine</RepositoryUrl>
     <PackageIconUrl>https://raw.githubusercontent.com/iyulab-rnd/public/main/images/iyulab_128.png</PackageIconUrl>
-    <PackageTags>C#,dynamic-evaluation,expression-interpolation,runtime-evaluation,script-execution</PackageTags>
+    <PackageTags>Dynamic Expression, String Interpolation, Runtime Evaluation, Scripting, Dynamic Code, Expression Engine</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
