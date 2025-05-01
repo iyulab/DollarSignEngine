@@ -11,7 +11,7 @@ namespace DollarSignEngine;
 public static partial class DollarSign
 {
     /// <summary>
-    /// Checks if an expression represents an array/list indexer access (e.g., "array[0]", "dict["key"]")
+    /// Checks if an expression represents an array/list indexer access or nested access (e.g., "array[0]", "dict["key"]", "dict["key"].Count")
     /// </summary>
     private static bool IsArrayIndexAccess(string expression, out string arrayName, out string indexOrKey)
     {
@@ -22,9 +22,10 @@ public static partial class DollarSign
         // array[0]
         // dict["key"] or dict['key']
         // items[^1]  (from end indexing)
+        // dict["key"].Property
         var match = Regex.Match(
             expression,
-            @"^([a-zA-Z_][a-zA-Z0-9_]*)\[(?:""([^""]*)""|'([^']*)'|(\^?\d+))\]$"
+            @"^([a-zA-Z_][a-zA-Z0-9_]*)\[(?:""([^""]*)""|'([^']*)'|(\^?\d+))\](?:\.([a-zA-Z_][a-zA-Z0-9_]*))?$"
         );
 
         if (match.Success)
@@ -38,6 +39,12 @@ public static partial class DollarSign
                 indexOrKey = match.Groups[3].Value;
             else if (match.Groups[4].Success) // ^1 or 0
                 indexOrKey = match.Groups[4].Value;
+
+            // If there's a property access (e.g., .Count), append it to the indexOrKey
+            if (match.Groups[5].Success)
+            {
+                indexOrKey += $".{match.Groups[5].Value}";
+            }
 
             return true;
         }

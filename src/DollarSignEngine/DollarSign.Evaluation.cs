@@ -160,13 +160,16 @@ public static partial class DollarSign
                 scriptBuilder.AppendLine("using System.Collections;");
                 scriptBuilder.AppendLine("using System.Collections.Generic;");
 
+                // Define the globals variable explicitly
+                scriptBuilder.AppendLine($"var globals = (dynamic)@globals;");
+
                 // Define each parameter as a variable
                 foreach (var param in paramDict)
                 {
                     if (param.Key != null && IsSafeIdentifier(param.Key))
                     {
-                        // Directly get value from globals using GetValue method
-                        scriptBuilder.AppendLine($"var {param.Key} = ((dynamic)globals)[\"" + param.Key + "\"];");
+                        // Access values via globals indexer to preserve type information
+                        scriptBuilder.AppendLine($"var {param.Key} = globals[\"{param.Key}\"];");
                     }
                 }
 
@@ -176,6 +179,7 @@ public static partial class DollarSign
                 string script = scriptBuilder.ToString();
                 Log.Debug($"Alternative script: {script}", option);
 
+                // Evaluate with the globals object passed as a parameter
                 return await CSharpScript.EvaluateAsync<object>(script, scriptOptions, globals);
             }
             catch (Exception fallbackEx)

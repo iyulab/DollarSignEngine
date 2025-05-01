@@ -16,8 +16,13 @@ public static partial class DollarSign
     {
         result = null;
 
+        // Split indexOrKey if it contains a property access (e.g., "Engineering.Count")
+        var parts = indexOrKey.Split(new[] { '.' }, 2);
+        string key = parts[0];
+        string? property = parts.Length > 1 ? parts[1] : null;
+
         // Handle numeric indexing for arrays and lists
-        if (int.TryParse(indexOrKey, out var index))
+        if (int.TryParse(key, out var index))
         {
             // For standard arrays
             if (collection is Array array)
@@ -25,6 +30,10 @@ public static partial class DollarSign
                 if (index >= 0 && index < array.Length)
                 {
                     result = array.GetValue(index);
+                    if (property != null && result != null)
+                    {
+                        return TryGetPropertyValue(result, property, out result);
+                    }
                     return true;
                 }
                 return false;
@@ -36,6 +45,10 @@ public static partial class DollarSign
                 if (index >= 0 && index < list.Count)
                 {
                     result = list[index];
+                    if (property != null && result != null)
+                    {
+                        return TryGetPropertyValue(result, property, out result);
+                    }
                     return true;
                 }
                 return false;
@@ -48,6 +61,10 @@ public static partial class DollarSign
                 if (indexerProperty != null)
                 {
                     result = indexerProperty.GetValue(collection, new object[] { index });
+                    if (property != null && result != null)
+                    {
+                        return TryGetPropertyValue(result, property, out result);
+                    }
                     return true;
                 }
             }
@@ -58,7 +75,7 @@ public static partial class DollarSign
         }
 
         // Handle indexer from end (^1)
-        if (indexOrKey.StartsWith("^") && int.TryParse(indexOrKey.Substring(1), out var fromEndIndex))
+        if (key.StartsWith("^") && int.TryParse(key.Substring(1), out var fromEndIndex))
         {
             // Handle arrays
             if (collection is Array array)
@@ -67,6 +84,10 @@ public static partial class DollarSign
                 if (actualIndex >= 0 && actualIndex < array.Length)
                 {
                     result = array.GetValue(actualIndex);
+                    if (property != null && result != null)
+                    {
+                        return TryGetPropertyValue(result, property, out result);
+                    }
                     return true;
                 }
                 return false;
@@ -79,6 +100,10 @@ public static partial class DollarSign
                 if (actualIndex >= 0 && actualIndex < list.Count)
                 {
                     result = list[actualIndex];
+                    if (property != null && result != null)
+                    {
+                        return TryGetPropertyValue(result, property, out result);
+                    }
                     return true;
                 }
                 return false;
@@ -87,15 +112,23 @@ public static partial class DollarSign
 
         // String keys for dictionaries
         // First check exact types we know
-        if (collection is IDictionary dict && dict.Contains(indexOrKey))
+        if (collection is IDictionary dict && dict.Contains(key))
         {
-            result = dict[indexOrKey];
+            result = dict[key];
+            if (property != null && result != null)
+            {
+                return TryGetPropertyValue(result, property, out result);
+            }
             return true;
         }
 
-        if (collection is IDictionary<string, object> dictObj && dictObj.TryGetValue(indexOrKey, out var value))
+        if (collection is IDictionary<string, object> dictObj && dictObj.TryGetValue(key, out var value))
         {
             result = value;
+            if (property != null && result != null)
+            {
+                return TryGetPropertyValue(result, property, out result);
+            }
             return true;
         }
 
@@ -103,21 +136,29 @@ public static partial class DollarSign
         if (collection is IDictionary dict2)
         {
             // Handle quoted keys (both single and double quotes)
-            if ((indexOrKey.StartsWith("\"") && indexOrKey.EndsWith("\"")) ||
-                (indexOrKey.StartsWith("'") && indexOrKey.EndsWith("'")))
+            if ((key.StartsWith("\"") && key.EndsWith("\"")) ||
+                (key.StartsWith("'") && key.EndsWith("'")))
             {
-                string unquotedKey = indexOrKey.Substring(1, indexOrKey.Length - 2);
+                string unquotedKey = key.Substring(1, key.Length - 2);
                 if (dict2.Contains(unquotedKey))
                 {
                     result = dict2[unquotedKey];
+                    if (property != null && result != null)
+                    {
+                        return TryGetPropertyValue(result, property, out result);
+                    }
                     return true;
                 }
             }
 
             // Try with string key directly
-            if (dict2.Contains(indexOrKey))
+            if (dict2.Contains(key))
             {
-                result = dict2[indexOrKey];
+                result = dict2[key];
+                if (property != null && result != null)
+                {
+                    return TryGetPropertyValue(result, property, out result);
+                }
                 return true;
             }
         }
@@ -137,10 +178,10 @@ public static partial class DollarSign
                 if (genericArgs.Length >= 2 && genericArgs[0] == typeof(string))
                 {
                     // Handle quoted keys (both single and double quotes)
-                    if ((indexOrKey.StartsWith("\"") && indexOrKey.EndsWith("\"")) ||
-                        (indexOrKey.StartsWith("'") && indexOrKey.EndsWith("'")))
+                    if ((key.StartsWith("\"") && key.EndsWith("\"")) ||
+                        (key.StartsWith("'") && key.EndsWith("'")))
                     {
-                        indexOrKey = indexOrKey.Substring(1, indexOrKey.Length - 2);
+                        key = key.Substring(1, key.Length - 2);
                     }
 
                     // Try to find TryGetValue method
@@ -149,13 +190,17 @@ public static partial class DollarSign
 
                     if (tryGetValueMethod != null)
                     {
-                        var parameters = new object[] { indexOrKey, null! };
+                        var parameters = new object[] { key, null! };
                         try
                         {
                             var success = (bool)tryGetValueMethod.Invoke(collection, parameters)!;
                             if (success)
                             {
                                 result = parameters[1];
+                                if (property != null && result != null)
+                                {
+                                    return TryGetPropertyValue(result, property, out result);
+                                }
                                 return true;
                             }
                         }
@@ -175,7 +220,11 @@ public static partial class DollarSign
 
                         if (indexerProperty != null)
                         {
-                            result = indexerProperty.GetValue(collection, new object[] { indexOrKey });
+                            result = indexerProperty.GetValue(collection, new object[] { key });
+                            if (property != null && result != null)
+                            {
+                                return TryGetPropertyValue(result, property, out result);
+                            }
                             return true;
                         }
                     }
@@ -198,13 +247,17 @@ public static partial class DollarSign
             if (stringIndexer != null)
             {
                 // Handle quoted keys (both single and double quotes)
-                if ((indexOrKey.StartsWith("\"") && indexOrKey.EndsWith("\"")) ||
-                    (indexOrKey.StartsWith("'") && indexOrKey.EndsWith("'")))
+                if ((key.StartsWith("\"") && key.EndsWith("\"")) ||
+                    (key.StartsWith("'") && key.EndsWith("'")))
                 {
-                    indexOrKey = indexOrKey.Substring(1, indexOrKey.Length - 2);
+                    key = key.Substring(1, key.Length - 2);
                 }
 
-                result = stringIndexer.GetValue(collection, new object[] { indexOrKey });
+                result = stringIndexer.GetValue(collection, new object[] { key });
+                if (property != null && result != null)
+                {
+                    return TryGetPropertyValue(result, property, out result);
+                }
                 return true;
             }
         }
