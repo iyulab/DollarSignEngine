@@ -9,6 +9,15 @@ public class BasicInterpolationTests : TestBase
     }
 
     [Fact]
+    public async Task AddCalc()
+    {
+        var expected = $"1 + 2 = {1 + 2}";
+        // Runtime
+        var actual = await DollarSign.EvalAsync("1 + 2 = {1 + 2}");
+        Assert.Equal(expected.ToString(), actual);
+    }
+
+    [Fact]
     public async Task BasicStringInterpolation()
     {
         var name = "John";
