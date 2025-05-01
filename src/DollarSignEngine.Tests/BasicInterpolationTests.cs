@@ -1,5 +1,4 @@
-﻿using System.Dynamic;
-using System.Globalization;
+﻿using System.Globalization;
 
 namespace DollarSignEngine.Tests;
 
@@ -7,7 +6,7 @@ namespace DollarSignEngine.Tests;
 /// Core tests to verify DollarSign runtime interpolation matches compile-time string interpolation behavior.
 /// Each test directly compares the result of C# compiler's string interpolation with DollarSign's runtime interpolation.
 /// </summary>
-public class StringInterpolationTests
+public class BasicInterpolationTests
 {
     // Basic interpolation tests
 

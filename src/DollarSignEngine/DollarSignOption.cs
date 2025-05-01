@@ -18,10 +18,10 @@ public class DollarSignOption
     /// <summary>
     /// Gets or sets additional namespaces to import in the script.
     /// </summary>
-    public List<string> AdditionalNamespaces { get; set; } = [];
+    public List<string> AdditionalNamespaces { get; set; } = new();
 
     /// <summary>
     /// Gets or sets additional assemblies to reference in the script.
     /// </summary>
-    public List<string> AdditionalAssemblies { get; set; } = [];
+    public List<string> AdditionalAssemblies { get; set; } = new();
 }

@@ -6,6 +6,17 @@ Dynamically evaluate and interpolate C# expressions at runtime with ease, levera
 
 The DollarSignEngine is a robust C# library designed to simplify the process of dynamically evaluating and interpolating expressions at runtime. Ideal for applications requiring on-the-fly script execution, it offers developers the flexibility to inject variables and execute complex C# expressions seamlessly.
 
+## Guiding Principles
+
+1. **Core Purpose**: Enable runtime evaluation of C# string interpolation ($"{}") exactly as it works in compile-time C#.
+
+2. **Extension Rules**:
+   - All features natively supported in C# string interpolation must be maintained
+   - Avoid extending functionality beyond standard C# interpolation syntax
+   - Only add features essential for runtime evaluation
+
+3. **Contributor Guidelines**: This library's sole purpose is runtime evaluation of C# interpolation strings. Additional features should only be considered if they directly support this core purpose.
+
 ## Features
 
 - **Dynamic Expression Evaluation:** Evaluate C# expressions dynamically at runtime, with support for interpolation and complex logic.
@@ -89,13 +100,3 @@ var settings = new Dictionary<string, string> { { "Theme", "Dark" }, { "FontSize
 var result = await DollarSign.EvalAsync("Theme: {settings[\"Theme\"]}, Font Size: {settings[\"FontSize\"]}", new { settings });
 Console.WriteLine(result); // Outputs: Theme: Dark, Font Size: 12
 ```
-
-## Project Structure
-
-The DollarSign engine is organized into partial classes to make the codebase more maintainable:
-
-- **DollarSign.Core.cs**: Contains the main evaluation methods
-- **DollarSign.Helpers.cs**: Helper methods for parameter conversion and handling
-- **DollarSign.Types.cs**: Type conversion and handling functionality
-- **DollarSignEngineException.cs**: Exception class for error handling
-- **DollarSignOption.cs**: Configuration options for the engine
