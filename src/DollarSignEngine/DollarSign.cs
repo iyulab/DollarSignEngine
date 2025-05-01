@@ -1,10 +1,4 @@
-﻿using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Scripting;
-using Microsoft.CodeAnalysis.Scripting;
-using System.Collections;
-using System.Reflection;
-using System.Text;
+﻿using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace DollarSignEngine;
@@ -12,8 +6,12 @@ namespace DollarSignEngine;
 /// <summary>
 /// Provides functionality to dynamically evaluate C# expressions using interpolation strings and parameters.
 /// </summary>
-public static class DollarSign
+public static partial class DollarSign
 {
+    // Unique mask pattern (very unlikely to appear in real strings)
+    private const string MASK_PREFIX = "__$$_";
+    private const string MASK_SUFFIX = "_$$__";
+
     /// <summary>
     /// Asynchronously evaluates a given C# expression as a string and returns the result.
     /// </summary>
@@ -21,21 +19,56 @@ public static class DollarSign
     {
         try
         {
-            var options = BuildScriptOptions(option);
-            var script = BuildCsScriptWithRoslyn(expression, parameter);
+            option ??= new DollarSignOption();
+#if DEBUG
+            option.EnableDebugLogging = true;
+#endif
 
-            // Enable debug logging if requested
-            if (option?.EnableDebugLogging == true)
+            // Handle escaped braces first
+            expression = HandleEscapedBraces(expression);
+
+            // Prepare the expression and protected patterns
+            string preprocessedExpression = expression;
+            List<(string original, string masked, int index)> protectedPatterns = new List<(string, string, int)>();
+
+            if (option.SupportDollarSignSyntax)
             {
-                Console.WriteLine($"Generated script:\n{script}");
+                // Dollar sign mode: evaluate ${...} and protect {...}
+                Log.Debug("Dollar sign mode enabled - evaluating ${...} and protecting {...}", option);
+
+                // Protect standard {...} patterns first
+                preprocessedExpression = ProtectStandardBraces(preprocessedExpression, protectedPatterns);
+
+                // Convert ${...} to {...} for evaluation
+                preprocessedExpression = Regex.Replace(preprocessedExpression, @"\$\{([^{}]+)\}", "{$1}");
+            }
+            else
+            {
+                // Standard mode: evaluate {...} and protect ${...}
+                Log.Debug("Standard mode enabled - evaluating {...} and protecting ${...}", option);
+
+                // Protect ${...} patterns
+                preprocessedExpression = ProtectDollarSignBraces(preprocessedExpression, protectedPatterns);
             }
 
-            var result = await CSharpScript.EvaluateAsync<string>(script, options);
+            Log.Debug($"Preprocessed expression: {preprocessedExpression}", option);
+
+            // Extract interpolation expressions to evaluate
+            var interpolationMatches = Regex.Matches(preprocessedExpression, @"\{([^{}]+)\}");
+
+            // If no patterns to evaluate, just restore protected parts and return
+            if (interpolationMatches.Count == 0)
+            {
+                return RestoreProtectedPatterns(preprocessedExpression, protectedPatterns);
+            }
+
+            // Evaluate all interpolations and perform replacements
+            string result = await EvaluateInterpolations(preprocessedExpression, interpolationMatches, parameter, option);
+
+            // Restore protected patterns
+            result = RestoreProtectedPatterns(result, protectedPatterns);
+
             return result;
-        }
-        catch (CompilationErrorException compilationError)
-        {
-            throw new DollarSignEngineException($"CompilationError: {compilationError.Message}", compilationError);
         }
         catch (Exception e)
         {
@@ -44,344 +77,91 @@ public static class DollarSign
     }
 
     /// <summary>
-    /// Builds script options with appropriate references and imports.
+    /// Evaluates all interpolations in an expression and performs replacements.
     /// </summary>
-    private static ScriptOptions BuildScriptOptions(DollarSignOption? option)
+    private static async Task<string> EvaluateInterpolations(
+        string expression,
+        MatchCollection interpolationMatches,
+        object? parameter,
+        DollarSignOption option)
     {
-        var options = ScriptOptions.Default
-            .WithImports("System", "System.Collections.Generic", "System.Linq", "System.Dynamic")
-            .AddReferences(
-                Assembly.Load("mscorlib"),
-                Assembly.Load("System"),
-                Assembly.Load("System.Core"),
-                Assembly.Load("Microsoft.CSharp")
-            );
+        // Create collection to store replacements
+        var replacements = new List<(string original, string replacement, int index, int length)>();
 
-        if (option != null)
+        // Process each match
+        foreach (Match match in interpolationMatches)
         {
-            if (option.AdditionalNamespaces.Count > 0)
-            {
-                options = options.WithImports(option.AdditionalNamespaces);
-            }
+            string originalMatchValue = match.Value;
+            string interpolationExpression = match.Groups[1].Value;
 
-            if (option.AdditionalAssemblies.Count > 0)
-            {
-                var assemblies = option.AdditionalAssemblies
-                    .Select(Assembly.Load)
-                    .ToArray();
-                options = options.AddReferences(assemblies);
-            }
+            Log.Debug($"Processing interpolation: {interpolationExpression}", option);
+
+            // Check for format specifier
+            string? formatSpecifier = null;
+            int? alignment = null;
+
+            // Extract alignment and format specifier
+            (interpolationExpression, alignment, formatSpecifier) = ExtractFormatting(interpolationExpression);
+
+            // Evaluate expression
+            object? value = await EvaluateExpressionAsync(interpolationExpression, parameter, option);
+
+            // Format result
+            string formattedValue = FormatValue(value, formatSpecifier, alignment, option.FormattingCulture);
+
+            // Store for replacement
+            replacements.Add((originalMatchValue, formattedValue, match.Index, match.Length));
         }
 
-        return options;
+        // Perform all replacements at once (from end to avoid index changes)
+        string result = expression;
+        foreach (var rep in replacements.OrderByDescending(r => r.index))
+        {
+            result = result.Substring(0, rep.index) +
+                    rep.replacement +
+                    result.Substring(rep.index + rep.length);
+        }
+
+        return result;
     }
 
     /// <summary>
-    /// Builds a C# script from the expression and parameters using Roslyn.
+    /// Formats a value according to the format specifier and alignment.
     /// </summary>
-    private static string BuildCsScriptWithRoslyn(string expression, object? parameter)
+    private static string FormatValue(object? value, string? formatSpec, int? alignment, CultureInfo? culture)
     {
-        var script = new StringBuilder();
-
-        // Add utility methods for safe property access
-        AppendHelperMethods(script);
-
-        // Add parameter declarations
-        if (parameter != null)
+        if (value == null)
         {
-            AppendParameterDeclarations(script, parameter);
+            return "";
         }
 
-        // Process the expression using Roslyn-based approach
-        string interpolatedExpression = InterpolationParser.ProcessInterpolation(expression);
+        // Apply format if provided
+        string result;
+        culture ??= CultureInfo.CurrentCulture;
 
-        // Add the interpolated expression and return statement
-        script.AppendLine($"return {interpolatedExpression};");
-
-        return script.ToString();
-    }
-
-    /// <summary>
-    /// Appends parameter declarations to the script.
-    /// </summary>
-    private static void AppendParameterDeclarations(StringBuilder script, object parameter)
-    {
-        // Direct parameter - expose all properties directly
-        if (parameter is not IDictionary<string, object?> dict)
+        if (!string.IsNullOrEmpty(formatSpec) && value is IFormattable formattable)
         {
-            // Store the original parameter as "_" for the helper methods to access
-            script.AppendLine($"var _ = {SerializeObjectAsExpression(parameter)};");
-
-            // Expose all public properties as top-level variables
-            foreach (var prop in parameter.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
-            {
-                script.AppendLine($"var {prop.Name} = _.{prop.Name};");
-            }
+            result = formattable.ToString(formatSpec, culture);
         }
         else
         {
-            // Dictionary parameter - declare each key-value pair
-            foreach (var pair in dict)
+            result = Convert.ToString(value, culture) ?? "";
+        }
+
+        // Apply alignment if provided
+        if (alignment.HasValue)
+        {
+            int spaces = Math.Abs(alignment.Value);
+            if (alignment.Value > 0)
             {
-                if (pair.Value != null)
-                {
-                    script.AppendLine($"var {pair.Key} = {SerializeObjectAsExpression(pair.Value)};");
-                }
+                result = result.PadLeft(spaces);
             }
-        }
-    }
-
-    /// <summary>
-    /// Serializes an object as a C# expression that can be evaluated.
-    /// </summary>
-    private static string SerializeObjectAsExpression(object? obj)
-    {
-        if (obj == null) return "null";
-
-        var type = obj.GetType();
-
-        // Handle primitive types
-        if (type == typeof(string))
-            return $"\"{obj.ToString()!.Replace("\"", "\\\"")}\"";
-        if (type == typeof(bool))
-            return obj.ToString()!.ToLower();
-        if (type == typeof(char))
-            return $"'{obj}'";
-        if (type == typeof(DateTime))
-            return $"DateTime.Parse(\"{obj}\")";
-
-        // Handle numeric types - let C# handle them directly
-        if (obj is byte || obj is sbyte || obj is short || obj is ushort ||
-            obj is int || obj is uint || obj is long || obj is ulong ||
-            obj is float || obj is double || obj is decimal)
-            return obj.ToString()!;
-
-        // Handle arrays
-        if (type.IsArray)
-        {
-            var array = (Array)obj;
-            var elements = new StringBuilder();
-            elements.Append("new [] { ");
-
-            for (int i = 0; i < array.Length; i++)
+            else if (alignment.Value < 0)
             {
-                elements.Append(SerializeObjectAsExpression(array.GetValue(i)));
-                if (i < array.Length - 1) elements.Append(", ");
-            }
-
-            elements.Append(" }");
-            return elements.ToString();
-        }
-
-        // Handle dictionaries specifically - improved to handle key type properly
-        if (obj is IDictionary dictionary)
-        {
-            var dictType = type.GetGenericArguments();
-            string keyType = "object";
-            string valueType = "object";
-
-            // Try to determine generic type arguments
-            if (dictType.Length == 2)
-            {
-                keyType = dictType[0].Name;
-                valueType = dictType[1].Name;
-            }
-
-            var elements = new StringBuilder();
-            elements.Append($"new System.Collections.Generic.Dictionary<{keyType}, {valueType}> {{ ");
-
-            bool first = true;
-            foreach (DictionaryEntry entry in dictionary)
-            {
-                if (!first) elements.Append(", ");
-
-                // Properly handle key serialization based on type
-                string keyString;
-                if (entry.Key is string)
-                    keyString = $"\"{entry.Key.ToString()!.Replace("\"", "\\\"")}\"";
-                else
-                    keyString = SerializeObjectAsExpression(entry.Key);
-
-                elements.Append("{ ")
-                       .Append(keyString)
-                       .Append(", ")
-                       .Append(SerializeObjectAsExpression(entry.Value))
-                       .Append(" }");
-
-                first = false;
-            }
-
-            elements.Append(" }");
-            return elements.ToString();
-        }
-
-        // Handle collections
-        if (obj is IEnumerable enumerable && obj is not string)
-        {
-            var elements = new StringBuilder();
-            elements.Append("new System.Collections.Generic.List<object> { ");
-
-            bool first = true;
-            foreach (var item in enumerable)
-            {
-                if (!first) elements.Append(", ");
-                elements.Append(SerializeObjectAsExpression(item));
-                first = false;
-            }
-
-            elements.Append(" }");
-            return elements.ToString();
-        }
-
-        // For complex objects, create an anonymous type with equivalent properties
-        var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-        if (properties.Length > 0)
-        {
-            var objInit = new StringBuilder();
-            objInit.Append("new { ");
-
-            bool first = true;
-            foreach (var prop in properties)
-            {
-                if (!first) objInit.Append(", ");
-                objInit.Append($"{prop.Name} = {SerializeObjectAsExpression(prop.GetValue(obj))}");
-                first = false;
-            }
-
-            objInit.Append(" }");
-            return objInit.ToString();
-        }
-
-        // Fallback to ToString() for anything else
-        return $"\"{obj.ToString()!.Replace("\"", "\\\"")}\"";
-    }
-
-    /// <summary>
-    /// Appends helper methods to the script.
-    /// </summary>
-    private static void AppendHelperMethods(StringBuilder script)
-    {
-        script.AppendLine(@"
-// Helper function for safe property access
-object? SafePropertyAccess(object? obj, string propertyPath)
-{
-    if (obj == null) return null;
-    
-    var parts = propertyPath.Split('.');
-    var current = obj;
-    
-    foreach (var part in parts)
-    {
-        if (current == null) return null;
-        
-        // Handle indexer syntax like Items[0] or Dict[""key""]
-        if (part.Contains('[') && part.Contains(']'))
-        {
-            string propName = part.Substring(0, part.IndexOf('['));
-            string indexStr = part.Substring(part.IndexOf('[') + 1, part.IndexOf(']') - part.IndexOf('[') - 1);
-            
-            // Get the collection property
-            var propInfo = current.GetType().GetProperty(propName);
-            if (propInfo == null) return null;
-            
-            var collection = propInfo.GetValue(current);
-            if (collection == null) return null;
-            
-            // Access by indexer
-            try {
-                if (collection is System.Collections.IDictionary dict)
-                {
-                    // Remove quotes if present
-                    if (indexStr.StartsWith('""') && indexStr.EndsWith('""'))
-                    {
-                        indexStr = indexStr.Substring(1, indexStr.Length - 2);
-                    }
-                    
-                    current = dict[indexStr];
-                }
-                else if (collection is System.Collections.IList list)
-                {
-                    int index = int.Parse(indexStr);
-                    current = list[index];
-                }
-                else
-                {
-                    // Try to invoke an indexer through reflection
-                    var indexerProp = collection.GetType().GetProperties()
-                        .FirstOrDefault(p => p.GetIndexParameters().Length > 0);
-                    
-                    if (indexerProp != null)
-                    {
-                        // Convert the index to the appropriate type
-                        var indexParams = indexerProp.GetIndexParameters();
-                        var indexType = indexParams[0].ParameterType;
-                        var convertedIndex = Convert.ChangeType(indexStr, indexType);
-                        
-                        current = indexerProp.GetValue(collection, new[] { convertedIndex });
-                    }
-                    else
-                    {
-                        return null; // No indexer found
-                    }
-                }
-            }
-            catch {
-                return null; // Index access failed
+                result = result.PadRight(spaces);
             }
         }
-        else
-        {
-            // Regular property access
-            var propInfo = current.GetType().GetProperty(part);
-            if (propInfo == null) return null;
-            
-            current = propInfo.GetValue(current);
-        }
-    }
-    
-    return current;
-}
 
-// Helper function to format values
-string FormatValue(object? value, string? format = null, int? alignment = null)
-{
-    if (value == null) return ""null"";
-    
-    string result;
-    
-    // Apply format if provided
-    if (!string.IsNullOrEmpty(format))
-    {
-        if (value is IFormattable formattable)
-        {
-            result = formattable.ToString(format, System.Globalization.CultureInfo.CurrentCulture);
-        }
-        else
-        {
-            result = value.ToString();
-        }
-    }
-    else
-    {
-        result = value.ToString();
-    }
-    
-    // Apply alignment if provided
-    if (alignment.HasValue)
-    {
-        int spaces = Math.Abs(alignment.Value);
-        if (alignment.Value > 0)
-        {
-            result = result.PadLeft(spaces);
-        }
-        else if (alignment.Value < 0)
-        {
-            result = result.PadRight(spaces);
-        }
-    }
-    
-    return result;
-}
-");
+        return result;
     }
 }
