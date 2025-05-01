@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading.Tasks;
 using Xunit;
 using Xunit.Abstractions;
@@ -159,7 +160,8 @@ public class VariableResolverTests : TestBase
                     return 123.456;
                 return null;
             },
-            PreferCallbackResolution = true
+            PreferCallbackResolution = true,
+            FormattingCulture = new CultureInfo("en-US") // 명시적으로 en-US 설정
         };
 
         // Act
