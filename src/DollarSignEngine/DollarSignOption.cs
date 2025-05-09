@@ -50,7 +50,7 @@ public class DollarSignOption
     /// Gets or sets the culture to use for formatting operations.
     /// If null, the current culture is used.
     /// </summary>
-    public CultureInfo? FormattingCulture { get; set; } = null;
+    public CultureInfo? CultureInfo { get; set; } = null;
 
     /// <summary>
     /// Gets or sets a callback for custom variable resolution before falling back to script evaluation.

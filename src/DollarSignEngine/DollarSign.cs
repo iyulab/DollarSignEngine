@@ -107,7 +107,7 @@ public static partial class DollarSign
             object? value = await EvaluateExpressionAsync(interpolationExpression, parameter, option);
 
             // Format result
-            string formattedValue = FormatValue(value, formatSpecifier, alignment, option.FormattingCulture);
+            string formattedValue = FormatValue(value, formatSpecifier, alignment, option.CultureInfo);
 
             // Store for replacement
             replacements.Add((originalMatchValue, formattedValue, match.Index, match.Length));

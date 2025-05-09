@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Globalization;
-using System.Threading.Tasks;
-using Xunit;
+﻿using System.Globalization;
 using Xunit.Abstractions;
 
 namespace DollarSignEngine.Tests;
@@ -161,7 +157,7 @@ public class VariableResolverTests : TestBase
                 return null;
             },
             PreferCallbackResolution = true,
-            FormattingCulture = new CultureInfo("en-US") // 명시적으로 en-US 설정
+            CultureInfo = new CultureInfo("en-US") // 명시적으로 en-US 설정
         };
 
         // Act
