@@ -1,10 +1,10 @@
 # DollarSignEngine
 
-Dynamically evaluate and interpolate C# expressions at runtime with ease, leveraging a powerful script execution engine.
+Dynamically evaluate and interpolate C# expressions at runtime with ease, leveraging a powerful expression evaluation engine.
 
 ## Introduction
 
-The DollarSignEngine is a robust C# library designed to simplify the process of dynamically evaluating and interpolating expressions at runtime. Ideal for applications requiring on-the-fly script execution, it offers developers the flexibility to inject variables and execute complex C# expressions seamlessly.
+The DollarSignEngine is a robust C# library designed to simplify the process of dynamically evaluating and interpolating expressions at runtime. Ideal for applications requiring on-the-fly evaluation of string templates, it offers developers the flexibility to inject variables and execute complex C# expressions with the same syntax as C# string interpolation.
 
 ## Guiding Principles
 
@@ -22,11 +22,12 @@ The DollarSignEngine is a robust C# library designed to simplify the process of 
 - **Dynamic Expression Evaluation:** Evaluate C# expressions dynamically at runtime, with support for interpolation and complex logic.
 - **Flexible Parameter Injection:** Easily pass parameters into expressions using dictionaries, anonymous objects, or regular C# objects.
 - **Support for Complex Types:** Effortlessly handle complex data types, including custom objects, collections, and more.
-- **Method Invocation:** Call methods on parameter objects within expressions, such as `{obj.Method()}` or `${obj.Method()}`, consistent with C# interpolation syntax. *(Added)*
+- **Method Invocation:** Call methods on parameter objects within expressions, such as `{obj.Method()}` or `${obj.Method()}`, consistent with C# interpolation syntax.
 - **Format Specifiers & Alignment:** Full support for C# format specifiers and alignment in interpolated expressions.
 - **Custom Variable Resolution:** Provide custom variable resolvers for advanced use cases.
 - **Multiple Syntax Options:** Support for both standard C# interpolation `{expression}` and dollar-sign `${expression}` syntax.
 - **Comprehensive Error Handling:** Provides detailed exceptions for compilation and runtime errors to ease debugging.
+- **Powerful Expression Evaluation:** Uses DynamicExpresso internally to support a full range of C# expressions including ternary operators, arithmetic operations, and LINQ expressions.
 
 ## Installation
 
@@ -123,13 +124,22 @@ Console.WriteLine(result); // Outputs: Progress:    86.5%
 ### Conditional Logic
 
 ```csharp
+// Simple ternary operation
 var age = 20;
 var result = await DollarSign.EvalAsync("You are {(age >= 18 ? \"adult\" : \"minor\")}.", new { age });
 Console.WriteLine(result); // Outputs: You are adult.
 
+// Nested ternary operations
 var score = 85;
 var result = await DollarSign.EvalAsync("Grade: {(score >= 90 ? \"A\" : score >= 80 ? \"B\" : \"C\")}.", new { score });
 Console.WriteLine(result); // Outputs: Grade: B.
+
+// Complex condition with formatting
+var price = 123.456;
+var discount = true;
+var result = await DollarSign.EvalAsync("Final price: {(discount ? price * 0.9 : price):C2}", 
+    new { price, discount });
+Console.WriteLine(result); // Outputs: Final price: $111.11
 ```
 
 ### Working with Collections
@@ -170,6 +180,26 @@ var methodResult = await DollarSign.EvalAsync("Greeting: ${greeter.Hello()}", ne
 Console.WriteLine(methodResult); // Outputs: Greeting: hello, Bob
 ```
 
+### Arithmetic and LINQ Operations
+
+```csharp
+// Arithmetic operations
+var values = new { a = 10, b = 5 };
+var result = await DollarSign.EvalAsync("Sum: {a + b}, Product: {a * b}, Division: {a / b}", values);
+Console.WriteLine(result); // Outputs: Sum: 15, Product: 50, Division: 2
+
+// LINQ operations with collections
+var items = new { products = new[] { 
+    new { Name = "Apple", Price = 1.99 }, 
+    new { Name = "Orange", Price = 0.99 }, 
+    new { Name = "Banana", Price = 0.59 } 
+}};
+var result = await DollarSign.EvalAsync(
+    "Average price: {products.Average(p => p.Price):C2}, Most expensive: {products.OrderByDescending(p => p.Price).First().Name}",
+    items);
+Console.WriteLine(result); // Outputs: Average price: $1.19, Most expensive: Apple
+```
+
 ### Custom Variable Resolution
 
 ```csharp
@@ -207,14 +237,11 @@ var options = new DollarSignOption
     // Additional namespaces to import in the script
     AdditionalNamespaces = new List<string> { "System.Text.Json" },
     
-    // Additional assemblies to reference in the script
-    AdditionalAssemblies = new List<string> { "System.Text.Json.dll" },
-    
     // Whether to use strict mode for parameter access
     StrictParameterAccess = false,
     
     // The culture to use for formatting operations
-    FormattingCulture = new CultureInfo("en-US"),
+    CultureInfo = new CultureInfo("en-US"),
     
     // Whether to support dollar sign prefixed variables (${name})
     SupportDollarSignSyntax = true,
@@ -222,8 +249,8 @@ var options = new DollarSignOption
     // A callback for custom variable resolution
     VariableResolver = (expression, parameter) => { /* ... */ },
     
-    // Whether to prefer callback-based resolution over script evaluation
-    PreferCallbackResolution = true
+    // Whether to optimize ternary operator evaluation
+    OptimizeTernaryEvaluation = true
 };
 ```
 
@@ -243,3 +270,22 @@ catch (DollarSignEngineException ex)
     // Handle the error...
 }
 ```
+
+## Implementation Details
+
+DollarSignEngine uses [DynamicExpresso](https://github.com/dynamicexpresso/DynamicExpresso) internally for expression evaluation. This provides robust support for a wide range of C# expressions, including:
+
+- Arithmetic operations
+- Ternary operators
+- Method calls
+- LINQ queries
+- Property access
+- Collection indexing
+
+The library handles parsing templates, extracting expressions, evaluating them using DynamicExpresso, and applying format specifiers before assembling the final output.
+
+## Performance Considerations
+
+- Expression evaluation results are cached when possible to improve performance for repeated calls
+- Avoid unnecessary complex expressions in performance-critical code paths
+- For templates that are evaluated many times with different parameters, consider reusing the same template string

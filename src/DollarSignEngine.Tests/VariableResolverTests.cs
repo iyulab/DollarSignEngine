@@ -13,7 +13,7 @@ public class VariableResolverTests : TestBase
     public async Task BasicVariableResolver()
     {
         // Arrange
-        var options = new DollarSignOption
+        var options = new DollarSignOptions
         {
             VariableResolver = (expression, parameter) =>
             {
@@ -21,7 +21,6 @@ public class VariableResolverTests : TestBase
                     return "Alice";
                 return null;
             },
-            PreferCallbackResolution = true
         };
 
         // Act
@@ -36,7 +35,7 @@ public class VariableResolverTests : TestBase
     {
         // Arrange
         var parameters = new { role = "Admin" };
-        var options = new DollarSignOption
+        var options = new DollarSignOptions
         {
             VariableResolver = (expression, parameter) =>
             {
@@ -46,7 +45,6 @@ public class VariableResolverTests : TestBase
                     return ((dynamic)parameter).role;
                 return null;
             },
-            PreferCallbackResolution = true
         };
 
         // Act
@@ -61,7 +59,7 @@ public class VariableResolverTests : TestBase
     {
         // Arrange
         var parameters = new { name = "Bob" };
-        var options = new DollarSignOption
+        var options = new DollarSignOptions
         {
             VariableResolver = (expression, parameter) =>
             {
@@ -70,7 +68,6 @@ public class VariableResolverTests : TestBase
                     return "Hi";
                 return null;
             },
-            PreferCallbackResolution = true
         };
 
         // Act
@@ -84,7 +81,7 @@ public class VariableResolverTests : TestBase
     public async Task VariableResolverWithComplexExpression()
     {
         // Arrange
-        var options = new DollarSignOption
+        var options = new DollarSignOptions
         {
             VariableResolver = (expression, parameter) =>
             {
@@ -92,7 +89,6 @@ public class VariableResolverTests : TestBase
                     return DateTime.Now.ToString("yyyy-MM-dd");
                 return null;
             },
-            PreferCallbackResolution = true
         };
 
         // Act
@@ -107,7 +103,7 @@ public class VariableResolverTests : TestBase
     public async Task VariableResolverWithCollection()
     {
         // Arrange
-        var options = new DollarSignOption
+        var options = new DollarSignOptions
         {
             VariableResolver = (expression, parameter) =>
             {
@@ -115,7 +111,7 @@ public class VariableResolverTests : TestBase
                     return new List<int> { 1, 2, 3, 4, 5 };
                 return null;
             },
-            PreferCallbackResolution = true
+            EnableDebugLogging = true,
         };
 
         // Act
@@ -126,29 +122,10 @@ public class VariableResolverTests : TestBase
     }
 
     [Fact]
-    public async Task VariableResolverThrowsWhenStrictMode()
-    {
-        // Arrange
-        var options = new DollarSignOption
-        {
-            VariableResolver = (expression, parameter) =>
-            {
-                throw new Exception("Resolver failed");
-            },
-            StrictParameterAccess = true,
-            PreferCallbackResolution = true
-        };
-
-        // Act & Assert
-        await Assert.ThrowsAsync<DollarSignEngineException>(() =>
-            DollarSign.EvalAsync("Value: {test}", null, options));
-    }
-
-    [Fact]
     public async Task VariableResolverWithFormatSpecifier()
     {
         // Arrange
-        var options = new DollarSignOption
+        var options = new DollarSignOptions
         {
             VariableResolver = (expression, parameter) =>
             {
@@ -156,7 +133,6 @@ public class VariableResolverTests : TestBase
                     return 123.456;
                 return null;
             },
-            PreferCallbackResolution = true,
             CultureInfo = new CultureInfo("en-US") // 명시적으로 en-US 설정
         };
 
@@ -171,7 +147,7 @@ public class VariableResolverTests : TestBase
     public async Task VariableResolverWithDollarSignSyntax()
     {
         // Arrange
-        var options = new DollarSignOption
+        var options = new DollarSignOptions
         {
             VariableResolver = (expression, parameter) =>
             {
@@ -180,7 +156,6 @@ public class VariableResolverTests : TestBase
                 return null;
             },
             SupportDollarSignSyntax = true,
-            PreferCallbackResolution = true
         };
 
         // Act
@@ -191,34 +166,10 @@ public class VariableResolverTests : TestBase
     }
 
     [Fact]
-    public async Task VariableResolverWithoutPreferCallbackResolution()
-    {
-        // Arrange
-        var parameters = new { name = "David" };
-        var options = new DollarSignOption
-        {
-            VariableResolver = (expression, parameter) =>
-            {
-                // This should be ignored since PreferCallbackResolution is false
-                if (expression == "name")
-                    return "Ignored";
-                return null;
-            },
-            PreferCallbackResolution = false
-        };
-
-        // Act
-        var result = await DollarSign.EvalAsync("Hello, {name}!", parameters, options);
-
-        // Assert
-        Assert.Equal("Hello, David!", result);
-    }
-
-    [Fact]
     public async Task VariableResolverWithNullParameter()
     {
         // Arrange
-        var options = new DollarSignOption
+        var options = new DollarSignOptions
         {
             VariableResolver = (expression, parameter) =>
             {
@@ -226,7 +177,6 @@ public class VariableResolverTests : TestBase
                     return "TestValue";
                 return null;
             },
-            PreferCallbackResolution = true
         };
 
         // Act

@@ -362,4 +362,4 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 scripts/nuget-publish.ps1
-/src/DollarSignEngine/BUILD.md
+/src/DollarSignEngine/FOR_AI.txt

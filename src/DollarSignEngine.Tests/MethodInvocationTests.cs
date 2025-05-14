@@ -15,7 +15,7 @@ public class MethodInvocationTests : TestBase
         var data = new MyClass { Name = "John" };
 
         // Test with SupportDollarSignSyntax enabled
-        var optionsWithDollarSign = new DollarSignOption
+        var optionsWithDollarSign = new DollarSignOptions
         {
             SupportDollarSignSyntax = true,
             EnableDebugLogging = true // Enable for debugging
@@ -24,7 +24,7 @@ public class MethodInvocationTests : TestBase
         var actualWithDollarSign = await DollarSign.EvalAsync("${Hello()}", data, optionsWithDollarSign);
 
         // Test with SupportDollarSignSyntax disabled
-        var optionsWithoutDollarSign = new DollarSignOption
+        var optionsWithoutDollarSign = new DollarSignOptions
         {
             SupportDollarSignSyntax = false,
             EnableDebugLogging = true
@@ -42,7 +42,7 @@ public class MethodInvocationTests : TestBase
     {
         // Arrange
         var data = new MyClass { Name = "John" };
-        var options = new DollarSignOption
+        var options = new DollarSignOptions
         {
             SupportDollarSignSyntax = true,
             ThrowOnMissingParameter = true,

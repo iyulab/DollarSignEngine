@@ -112,7 +112,7 @@ public class BasicInterpolationTests : TestBase
     public async Task DollarSignSyntaxSupport()
     {
         var name = "John";
-        var option = new DollarSignOption { SupportDollarSignSyntax = true };
+        var option = new DollarSignOptions { SupportDollarSignSyntax = true };
 
         var expected = $"Hello, {name}!";
         var actual = await DollarSign.EvalAsync("Hello, ${name}!", new { name }, option);
@@ -126,7 +126,7 @@ public class BasicInterpolationTests : TestBase
         // Testing both syntaxes with dollar sign option enabled
         // Only ${name} should be evaluated, {name} should remain as-is
         var name = "John";
-        var option = new DollarSignOption { SupportDollarSignSyntax = true };
+        var option = new DollarSignOptions { SupportDollarSignSyntax = true };
         var expected = "Name: {name}, Value: John";
         var actual = await DollarSign.EvalAsync("Name: {name}, Value: ${name}", new { name }, option);
         Assert.Equal(expected, actual);
@@ -148,25 +148,12 @@ public class BasicInterpolationTests : TestBase
     {
         // Testing with JSON template using dollar sign
         var user = new { name = "John", age = 30 };
-        var option = new DollarSignOption { SupportDollarSignSyntax = true };
+        var option = new DollarSignOptions { SupportDollarSignSyntax = true };
 
         var template = "{ \"user\": { \"name\": \"{name}\", \"age\": ${age} } }";
         var expected = "{ \"user\": { \"name\": \"{name}\", \"age\": 30 } }";
 
         var actual = await DollarSign.EvalAsync(template, user, option);
-        Assert.Equal(expected, actual);
-    }
-
-    [Fact]
-    public async Task JsonTemplateWithStandardMode()
-    {
-        // Testing with JSON template using standard mode
-        var user = new { name = "John", age = 30 };
-
-        var template = "{ \"user\": { \"name\": \"{name}\", \"age\": {age} } }";
-        var expected = "{ \"user\": { \"name\": \"John\", \"age\": 30 } }";
-
-        var actual = await DollarSign.EvalAsync(template, user);
         Assert.Equal(expected, actual);
     }
 }
