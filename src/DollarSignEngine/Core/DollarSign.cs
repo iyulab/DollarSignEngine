@@ -39,42 +39,54 @@ public static class DollarSign
             }
 
             // Process each interpolation part
-            foreach (var part in interpolationParts)
-            {
-                // Evaluate the expression
-                object? result;
-
-                try
-                {
-                    Log.Debug($"Processing expression: {part.Expression}", options);
-                    result = await Task.Run(() => _expressionEvaluator.Evaluate(part.Expression, parameter, options));
-                }
-                catch (Exception ex)
-                {
-                    Log.Debug($"Error evaluating expression '{part.Expression}': {ex.Message}", options);
-                    if (options.ThrowOnMissingParameter)
-                    {
-                        throw;
-                    }
-                    result = null;
-                }
-
-                // Format the result
-                var formattedResult = _formatApplier.Format(result, part.FormatSpecifier, part.Alignment, options.CultureInfo, options);
-                Log.Debug($"Formatted result for '{part.Expression}': '{formattedResult}'", options);
-
-                // Replace the placeholder with the formatted result
-                processedTemplate = processedTemplate.Replace(part.Placeholder, formattedResult);
-            }
-
-            // Restore escaped braces
-            var finalResult = _templateParser.RestoreEscapedBraces(processedTemplate);
-            Log.Debug($"Final processed template: {finalResult}", options);
-            return finalResult;
+            return await ProcessInterpolationParts(processedTemplate, interpolationParts, parameter, options);
         }
         catch (Exception ex)
         {
             throw new DollarSignEngineException($"Error evaluating template: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Processes interpolation parts by evaluating and formatting them.
+    /// </summary>
+    private static async Task<string> ProcessInterpolationParts(string processedTemplate, List<InterpolationPart> parts, object? parameter, DollarSignOptions options)
+    {
+        foreach (var part in parts)
+        {
+            // Evaluate the expression
+            object? result = await EvaluateExpressionPart(part.Expression, parameter, options);
+
+            // Format the result
+            var formattedResult = _formatApplier.Format(result, part.FormatSpecifier, part.Alignment, options.CultureInfo, options);
+            Log.Debug($"Formatted result for '{part.Expression}': '{formattedResult}'", options);
+
+            // Replace the placeholder with the formatted result
+            processedTemplate = processedTemplate.Replace(part.Placeholder, formattedResult);
+        }
+
+        // Restore escaped braces
+        return _templateParser.RestoreEscapedBraces(processedTemplate);
+    }
+
+    /// <summary>
+    /// Evaluates a single expression part.
+    /// </summary>
+    private static async Task<object?> EvaluateExpressionPart(string expression, object? parameter, DollarSignOptions options)
+    {
+        try
+        {
+            Log.Debug($"Processing expression: {expression}", options);
+            return await Task.Run(() => _expressionEvaluator.Evaluate(expression, parameter, options));
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"Error evaluating expression '{expression}': {ex.Message}", options);
+            if (options.ThrowOnMissingParameter)
+            {
+                throw;
+            }
+            return null;
         }
     }
 

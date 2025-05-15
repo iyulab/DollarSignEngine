@@ -1,6 +1,4 @@
 ﻿using DynamicExpresso;
-using System.Reflection;
-using System.Text.RegularExpressions;
 
 namespace DollarSignEngine.Evaluation;
 
@@ -10,14 +8,10 @@ namespace DollarSignEngine.Evaluation;
 internal class ExpressionEvaluator
 {
     private readonly ExpressionCache _cache;
+    private readonly TernaryExpressionEvaluator _ternaryEvaluator;
 
-    // Simple regex for parameter extraction
+    // Optimized regex patterns with Compiled option for better performance
     private static readonly Regex SimpleVariableRegex = new(@"^[a-zA-Z_][a-zA-Z0-9_]*$", RegexOptions.Compiled);
-
-    // Regex for lambda expressions like "n => n.Property" or "x => x * 2"
-    private static readonly Regex LambdaExpressionRegex = new(@"(\w+)\s*=>\s*(.+)", RegexOptions.Compiled);
-
-    // Regex for index-from-end operator (^n)
     private static readonly Regex IndexFromEndRegex = new(@"(\w+)\s*\[\s*\^(\d+)\s*\]", RegexOptions.Compiled);
 
     /// <summary>
@@ -26,6 +20,7 @@ internal class ExpressionEvaluator
     public ExpressionEvaluator(ExpressionCache cache)
     {
         _cache = cache;
+        _ternaryEvaluator = new TernaryExpressionEvaluator(this);
     }
 
     /// <summary>
@@ -35,92 +30,22 @@ internal class ExpressionEvaluator
     {
         Log.Debug($"Evaluating expression: {expression}", options);
 
-        // Handle special cases that DynamicExpresso might not support directly
+        // Handle empty expressions
         if (string.IsNullOrWhiteSpace(expression))
-        {
             return null;
-        }
 
-        // Try with custom variable resolver first
-        if (options.VariableResolver != null)
-        {
-            // First try with the complete expression
-            var resolvedValue = options.VariableResolver(expression, parameter);
-            if (resolvedValue != null)
-            {
-                Log.Debug($"Variable resolver returned value for complete expression: {expression}", options);
-                return resolvedValue;
-            }
+        // Try custom variable resolver first
+        if (TryResolveWithCustomResolver(expression, parameter, options, out var resolvedValue))
+            return resolvedValue;
 
-            // If the expression contains a dot, try to resolve the variable part
-            if (expression.Contains('.'))
-            {
-                var parts = ExtractVariableParts(expression);
-                if (!string.IsNullOrEmpty(parts.variableName))
-                {
-                    var resolvedVariable = options.VariableResolver(parts.variableName, parameter);
-                    if (resolvedVariable != null)
-                    {
-                        Log.Debug($"Variable resolver returned value for variable part: {parts.variableName}", options);
+        // Transform index-from-end operator (^n)
+        expression = TransformIndexFromEndOperator(expression);
 
-                        // Create a temporary parameter dictionary with the resolved variable
-                        var tempParams = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-                        {
-                            { parts.variableName, resolvedVariable }
-                        };
+        // Handle ternary expressions
+        if (TernaryExpressionEvaluator.IsTernaryExpression(expression))
+            return _ternaryEvaluator.EvaluateTernary(expression, parameter, options);
 
-                        // Add the original parameters too
-                        if (parameter != null)
-                        {
-                            var extractedParams = ExtractParameters(parameter);
-                            foreach (var pair in extractedParams)
-                            {
-                                if (!tempParams.ContainsKey(pair.Key))
-                                {
-                                    tempParams[pair.Key] = pair.Value;
-                                }
-                            }
-                        }
-
-                        // Create an interpreter with the resolved variable
-                        var interpreter = CreateInterpreter(options).SetVariables(tempParams);
-
-                        try
-                        {
-                            // Try to evaluate the complete expression with the resolved variable
-                            var result = interpreter.Eval(expression);
-                            Log.Debug($"Successfully evaluated expression with resolved variable: {result}", options);
-                            return result;
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Debug($"Failed to evaluate expression with resolved variable: {ex.Message}", options);
-                            // Continue with normal evaluation
-                        }
-                    }
-                }
-            }
-        }
-
-        // Handle index-from-end operator (^n)
-        var indexFromEndMatch = IndexFromEndRegex.Match(expression);
-        if (indexFromEndMatch.Success)
-        {
-            string arrayName = indexFromEndMatch.Groups[1].Value;
-            int indexFromEnd = int.Parse(indexFromEndMatch.Groups[2].Value);
-
-            // Replace with standard indexing: array[^1] -> array[array.Length - 1]
-            expression = $"{arrayName}[{arrayName}.Length - {indexFromEnd}]";
-            Log.Debug($"Transformed index-from-end expression to: {expression}", options);
-        }
-
-        // Check for ternary expression
-        if (IsTernaryExpression(expression))
-        {
-            return EvaluateTernary(expression, parameter, options);
-        }
-
-        // Simple case for direct variable access
+        // Handle direct variable access
         if (SimpleVariableRegex.IsMatch(expression) && parameter != null)
         {
             var parameters = ExtractParameters(parameter);
@@ -131,6 +56,101 @@ internal class ExpressionEvaluator
             }
         }
 
+        return EvaluateWithCaching(expression, parameter, options);
+    }
+
+    /// <summary>
+    /// Transforms index-from-end operator into standard indexing.
+    /// </summary>
+    private string TransformIndexFromEndOperator(string expression)
+    {
+        var indexFromEndMatch = IndexFromEndRegex.Match(expression);
+        if (indexFromEndMatch.Success)
+        {
+            string arrayName = indexFromEndMatch.Groups[1].Value;
+            int indexFromEnd = int.Parse(indexFromEndMatch.Groups[2].Value);
+
+            // Replace with standard indexing: array[^1] -> array[array.Length - 1]
+            return $"{arrayName}[{arrayName}.Length - {indexFromEnd}]";
+        }
+
+        return expression;
+    }
+
+    /// <summary>
+    /// Attempts to resolve an expression using the custom variable resolver.
+    /// </summary>
+    private bool TryResolveWithCustomResolver(string expression, object? parameter, DollarSignOptions options, out object? result)
+    {
+        result = null;
+
+        if (options.VariableResolver == null)
+            return false;
+
+        // Try with the complete expression
+        result = options.VariableResolver(expression, parameter);
+        if (result != null)
+            return true;
+
+        // Try with variable part if expression contains a dot
+        if (!expression.Contains('.'))
+            return false;
+
+        var parts = ExtractVariableParts(expression);
+        if (string.IsNullOrEmpty(parts.variableName))
+            return false;
+
+        var resolvedVariable = options.VariableResolver(parts.variableName, parameter);
+        if (resolvedVariable == null)
+            return false;
+
+        // Create a temporary parameter dictionary with the resolved variable
+        var tempParams = CreateCombinedParameters(parameter, parts.variableName, resolvedVariable);
+
+        // Create an interpreter and try to evaluate
+        try
+        {
+            var interpreter = CreateInterpreter(options).SetVariables(tempParams);
+            result = interpreter.Eval(expression);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Creates a combined parameter dictionary with original parameters and a resolved variable.
+    /// </summary>
+    private Dictionary<string, object?> CreateCombinedParameters(object? parameter, string variableName, object? resolvedVariable)
+    {
+        var tempParams = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            { variableName, resolvedVariable }
+        };
+
+        // Add the original parameters too
+        if (parameter != null)
+        {
+            var extractedParams = ExtractParameters(parameter);
+            foreach (var pair in extractedParams)
+            {
+                if (!tempParams.ContainsKey(pair.Key))
+                {
+                    tempParams[pair.Key] = pair.Value;
+                }
+            }
+        }
+
+        return tempParams;
+    }
+
+    /// <summary>
+    /// Evaluates an expression with caching support.
+    /// </summary>
+    private object? EvaluateWithCaching(string expression, object? parameter, DollarSignOptions options)
+    {
         // Check cache before evaluating
         string cacheKey = string.Empty;
         if (options.EnableCaching)
@@ -151,61 +171,35 @@ internal class ExpressionEvaluator
             }
         }
 
+        return EvaluateUsingInterpreter(expression, parameter, options, cacheKey);
+    }
+
+    /// <summary>
+    /// Evaluates an expression using the DynamicExpresso interpreter.
+    /// </summary>
+    private object? EvaluateUsingInterpreter(string expression, object? parameter, DollarSignOptions options, string cacheKey)
+    {
         try
         {
-            // Extract parameters from the parameter object
+            // Extract parameters and create interpreter
             var parameters = ExtractParameters(parameter);
+            var interpreter = CreateInterpreter(options).SetVariables(parameters);
 
-            // Create the interpreter with necessary references
-            var interpreter = CreateInterpreter(options);
+            // Try evaluation strategies
+            object? result = null;
+            bool success = TryDirectEvaluation(interpreter, expression, ref result) ||
+                           TryLambdaEvaluation(interpreter, expression, ref result);
 
-            // Register parameters with the interpreter
-            interpreter = interpreter.SetVariables(parameters);
+            if (!success)
+                throw new DollarSignEngineException($"Could not evaluate expression: {expression}");
 
-            // Use a Try-Catch approach with multiple evaluation strategies
-            try
+            // Cache the successful result
+            if (options.EnableCaching && !string.IsNullOrEmpty(cacheKey))
             {
-                // First strategy: direct evaluation
-                Log.Debug($"Trying direct evaluation...", options);
-                var result = interpreter.Eval(expression);
-                Log.Debug($"Direct evaluation succeeded: {result}", options);
-
-                // Cache the successful result
-                if (options.EnableCaching && !string.IsNullOrEmpty(cacheKey))
-                {
-                    _cache.CacheLambda(cacheKey, _ => result);
-                }
-
-                return result;
+                _cache.CacheLambda(cacheKey, _ => result);
             }
-            catch (Exception ex)
-            {
-                Log.Debug($"Direct evaluation failed: {ex.Message}", options);
 
-                // Second strategy: Lambda wrapping
-                try
-                {
-                    Log.Debug($"Trying lambda wrapping...", options);
-                    var lambda = interpreter.Parse<Func<object>>("() => " + expression);
-                    var result = lambda();
-                    Log.Debug($"Lambda evaluation succeeded: {result}", options);
-
-                    // Cache the successful result
-                    if (options.EnableCaching && !string.IsNullOrEmpty(cacheKey))
-                    {
-                        _cache.CacheLambda(cacheKey, _ => result);
-                    }
-
-                    return result;
-                }
-                catch (Exception lambdaEx)
-                {
-                    Log.Debug($"Lambda evaluation failed: {lambdaEx.Message}", options);
-
-                    // If all strategies fail, rethrow the original exception
-                    throw ex;
-                }
-            }
+            return result;
         }
         catch (Exception ex)
         {
@@ -220,16 +214,13 @@ internal class ExpressionEvaluator
     }
 
     /// <summary>
-    /// Determines if an expression is a ternary expression.
+    /// Tries to evaluate an expression directly.
     /// </summary>
-    private bool IsTernaryExpression(string expression)
+    private bool TryDirectEvaluation(Interpreter interpreter, string expression, ref object? result)
     {
-        if (!expression.Contains('?') || !expression.Contains(':'))
-            return false;
-
         try
         {
-            var parts = ParseTernary(expression);
+            result = interpreter.Eval(expression);
             return true;
         }
         catch
@@ -239,196 +230,20 @@ internal class ExpressionEvaluator
     }
 
     /// <summary>
-    /// Evaluates a ternary expression by manually parsing and evaluating its components.
+    /// Tries to evaluate an expression by wrapping it in a lambda.
     /// </summary>
-    private object? EvaluateTernary(string expression, object? parameter, DollarSignOptions options)
+    private bool TryLambdaEvaluation(Interpreter interpreter, string expression, ref object? result)
     {
-        Log.Debug($"Evaluating ternary expression: {expression}", options);
-
         try
         {
-            // Parse the ternary expression into its parts
-            var (condition, trueExpression, falseExpression) = ParseTernary(expression);
-
-            Log.Debug($"Parsed ternary components: condition='{condition}', true='{trueExpression}', false='{falseExpression}'", options);
-
-            // Evaluate the condition
-            var conditionResult = Evaluate(condition, parameter, options);
-            bool conditionValue;
-
-            // Handle null condition or convert to boolean
-            if (conditionResult == null)
-            {
-                conditionValue = false;
-            }
-            else if (conditionResult is bool b)
-            {
-                conditionValue = b;
-            }
-            else
-            {
-                try
-                {
-                    conditionValue = Convert.ToBoolean(conditionResult);
-                }
-                catch (Exception ex)
-                {
-                    throw new DollarSignEngineException($"Could not convert ternary condition result to boolean: {ex.Message}", ex);
-                }
-            }
-
-            Log.Debug($"Condition evaluated to: {conditionValue}", options);
-
-            // Based on the condition result, evaluate either the true or false expression
-            if (conditionValue)
-            {
-                var result = Evaluate(trueExpression, parameter, options);
-                Log.Debug($"True expression '{trueExpression}' evaluated to: {result}", options);
-                return result;
-            }
-            else
-            {
-                var result = Evaluate(falseExpression, parameter, options);
-                Log.Debug($"False expression '{falseExpression}' evaluated to: {result}", options);
-                return result;
-            }
+            var lambda = interpreter.Parse<Func<object>>("() => " + expression);
+            result = lambda();
+            return true;
         }
-        catch (Exception ex)
+        catch
         {
-            Log.Debug($"Error evaluating ternary expression: {ex.Message}", options);
-            throw new DollarSignEngineException($"Error evaluating ternary expression '{expression}': {ex.Message}", ex);
+            return false;
         }
-    }
-
-    /// <summary>
-    /// Parses a ternary expression into its parts.
-    /// </summary>
-    private (string condition, string trueExpr, string falseExpr) ParseTernary(string expression)
-    {
-        int questionIndex = -1;
-        int colonIndex = -1;
-        bool inString = false;
-        char stringDelimiter = '\0';
-        int parenDepth = 0;
-        int bracketDepth = 0;
-        int braceDepth = 0;
-
-        // Find the question mark
-        for (int i = 0; i < expression.Length; i++)
-        {
-            char c = expression[i];
-
-            // Handle string literals
-            if ((c == '"' || c == '\'') && (i == 0 || expression[i - 1] != '\\'))
-            {
-                if (!inString)
-                {
-                    inString = true;
-                    stringDelimiter = c;
-                }
-                else if (c == stringDelimiter)
-                {
-                    inString = false;
-                }
-                continue;
-            }
-
-            if (inString) continue;
-
-            // Track nesting
-            if (c == '(') parenDepth++;
-            else if (c == ')') parenDepth--;
-            else if (c == '[') bracketDepth++;
-            else if (c == ']') bracketDepth--;
-            else if (c == '{') braceDepth++;
-            else if (c == '}') braceDepth--;
-            // Find question mark outside of nesting
-            else if (c == '?' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
-            {
-                // Skip null coalescing operator
-                if (i < expression.Length - 1 && expression[i + 1] == '?')
-                {
-                    i++;
-                    continue;
-                }
-                questionIndex = i;
-                break;
-            }
-        }
-
-        if (questionIndex == -1)
-        {
-            throw new ArgumentException("Not a valid ternary expression: no '?' found");
-        }
-
-        // Find the matching colon
-        parenDepth = bracketDepth = braceDepth = 0;
-        inString = false;
-        stringDelimiter = '\0';
-        int nestedQuestions = 0;
-
-        for (int i = questionIndex + 1; i < expression.Length; i++)
-        {
-            char c = expression[i];
-
-            // Handle string literals
-            if ((c == '"' || c == '\'') && (i == 0 || expression[i - 1] != '\\'))
-            {
-                if (!inString)
-                {
-                    inString = true;
-                    stringDelimiter = c;
-                }
-                else if (c == stringDelimiter)
-                {
-                    inString = false;
-                }
-                continue;
-            }
-
-            if (inString) continue;
-
-            // Track nesting
-            if (c == '(') parenDepth++;
-            else if (c == ')') parenDepth--;
-            else if (c == '[') bracketDepth++;
-            else if (c == ']') bracketDepth--;
-            else if (c == '{') braceDepth++;
-            else if (c == '}') braceDepth--;
-            // Handle nested questions
-            else if (c == '?' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
-            {
-                // Skip null coalescing operator
-                if (i < expression.Length - 1 && expression[i + 1] == '?')
-                {
-                    i++;
-                    continue;
-                }
-                nestedQuestions++;
-            }
-            // Find the matching colon
-            else if (c == ':' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
-            {
-                if (nestedQuestions == 0)
-                {
-                    colonIndex = i;
-                    break;
-                }
-                nestedQuestions--;
-            }
-        }
-
-        if (colonIndex == -1)
-        {
-            throw new ArgumentException("Not a valid ternary expression: no matching ':' found");
-        }
-
-        // Extract the parts
-        string condition = expression.Substring(0, questionIndex).Trim();
-        string trueExpr = expression.Substring(questionIndex + 1, colonIndex - questionIndex - 1).Trim();
-        string falseExpr = expression.Substring(colonIndex + 1).Trim();
-
-        return (condition, trueExpr, falseExpr);
     }
 
     /// <summary>
@@ -459,11 +274,20 @@ internal class ExpressionEvaluator
             .Reference(typeof(IDictionary<,>));
 
         // Add additional namespaces
+        AddAdditionalNamespaces(interpreter, options);
+
+        return interpreter;
+    }
+
+    /// <summary>
+    /// Adds additional namespaces to the interpreter.
+    /// </summary>
+    private void AddAdditionalNamespaces(Interpreter interpreter, DollarSignOptions options)
+    {
         foreach (var ns in options.AdditionalNamespaces)
         {
             try
             {
-                // Try to load as an assembly
                 var assembly = Assembly.Load(ns);
                 if (assembly != null)
                 {
@@ -476,7 +300,7 @@ internal class ExpressionEvaluator
                     {
                         try
                         {
-                            interpreter = interpreter.Reference(type);
+                            interpreter.Reference(type);
                         }
                         catch
                         {
@@ -490,8 +314,6 @@ internal class ExpressionEvaluator
                 Log.Debug($"Error processing namespace or assembly {ns}: {ex.Message}", options);
             }
         }
-
-        return interpreter;
     }
 
     /// <summary>
@@ -504,9 +326,9 @@ internal class ExpressionEvaluator
         if (parameter == null)
             return result;
 
-        // Add parameter with a special name for direct access
+        // Add parameter with special names for direct access
         result["param"] = parameter;
-        result["this"] = parameter;  // Allow 'this' to access the parameter
+        result["this"] = parameter;
 
         // Handle dictionary types
         if (parameter is IDictionary<string, object?> dict)
@@ -530,15 +352,26 @@ internal class ExpressionEvaluator
         }
 
         // Extract properties from objects
-        var properties = parameter.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
-        foreach (var prop in properties)
+        ExtractPropertiesAndMethods(parameter, result);
+
+        return result;
+    }
+
+    /// <summary>
+    /// Extracts properties and methods from an object.
+    /// </summary>
+    private void ExtractPropertiesAndMethods(object parameter, Dictionary<string, object?> result)
+    {
+        var type = parameter.GetType();
+
+        // Extract properties
+        foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
         {
             try
             {
                 if (prop.CanRead)
                 {
-                    var value = prop.GetValue(parameter);
-                    result[prop.Name] = value;
+                    result[prop.Name] = prop.GetValue(parameter);
                 }
             }
             catch
@@ -547,17 +380,14 @@ internal class ExpressionEvaluator
             }
         }
 
-        // Extract methods that can be called from expressions
-        var methods = parameter.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
-            .Where(m => !m.IsSpecialName); // Skip property accessors
-
-        foreach (var method in methods)
+        // Extract methods
+        foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                    .Where(m => !m.IsSpecialName))
         {
             try
             {
                 if (!result.ContainsKey(method.Name))
                 {
-                    // Add the method as a delegate that can be invoked
                     result[method.Name] = CreateMethodDelegate(parameter, method);
                 }
             }
@@ -566,8 +396,6 @@ internal class ExpressionEvaluator
                 // Skip methods that can't be handled
             }
         }
-
-        return result;
     }
 
     /// <summary>
@@ -575,35 +403,25 @@ internal class ExpressionEvaluator
     /// </summary>
     private object CreateMethodDelegate(object target, MethodInfo method)
     {
-        // For parameterless methods that return a value, we could evaluate it directly,
-        // but that would not work for methods that rely on current state.
-        // Instead, we create a delegate that invokes the method on the target object.
-
-        Type delegateType;
         var parameters = method.GetParameters();
 
-        // Create different delegate types based on the method signature
+        // Handle parameterless methods
         if (parameters.Length == 0)
         {
             if (method.ReturnType == typeof(void))
             {
                 // Action for void methods with no parameters
-                var action = Delegate.CreateDelegate(typeof(Action), target, method);
-                return action;
+                return Delegate.CreateDelegate(typeof(Action), target, method);
             }
             else
             {
                 // Func<TResult> for methods that return a value with no parameters
-                delegateType = typeof(Func<>).MakeGenericType(method.ReturnType);
-                var func = Delegate.CreateDelegate(delegateType, target, method);
-                return func;
+                var delegateType = typeof(Func<>).MakeGenericType(method.ReturnType);
+                return Delegate.CreateDelegate(delegateType, target, method);
             }
         }
 
-        // For methods with parameters, we'd need more complex delegate creation
-        // But this simplified version should handle the test cases
-
-        // Just return the method as is - it will be called via reflection
+        // For methods with parameters, return the method as is
         return method;
     }
 
