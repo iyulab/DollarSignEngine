@@ -2,6 +2,10 @@
 
 namespace DollarSignEngine.Tests;
 
+[CollectionDefinition("MethodInvocation", DisableParallelization = true)]
+public class MethodInvocationDefinition { }
+
+[Collection("MethodInvocation")]
 public class MethodInvocationTests : TestBase
 {
     public MethodInvocationTests(ITestOutputHelper outputHelper) : base(outputHelper)

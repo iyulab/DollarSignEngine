@@ -8,22 +8,44 @@ internal static class Log
     /// <summary>
     /// Logs a debug message if debug logging is enabled.
     /// </summary>
-    public static void Debug(string message, DollarSignOptions option)
+    public static void Debug(string message, DollarSignOptions options)
     {
-        if (option.EnableDebugLogging)
+        if (options.EnableDebugLogging)
         {
-            Console.WriteLine(message);
+            Console.WriteLine($"[DollarSignEngine] {message}");
         }
     }
 
     /// <summary>
     /// Logs a formatted debug message if debug logging is enabled.
     /// </summary>
-    public static void Debug(string format, DollarSignOptions option, params object?[] args)
+    public static void Debug(string format, DollarSignOptions options, params object?[] args)
     {
-        if (option.EnableDebugLogging)
+        if (options.EnableDebugLogging)
         {
-            Console.WriteLine(format, args);
+            Console.WriteLine($"[DollarSignEngine] {string.Format(format, args)}");
+        }
+    }
+
+    /// <summary>
+    /// Logs an error message.
+    /// </summary>
+    public static void Error(string message, DollarSignOptions options)
+    {
+        if (options.EnableDebugLogging)
+        {
+            Console.WriteLine($"[DollarSignEngine ERROR] {message}");
+        }
+    }
+
+    /// <summary>
+    /// Logs a warning message.
+    /// </summary>
+    public static void Warning(string message, DollarSignOptions options)
+    {
+        if (options.EnableDebugLogging)
+        {
+            Console.WriteLine($"[DollarSignEngine WARNING] {message}");
         }
     }
 }

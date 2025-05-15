@@ -3,6 +3,10 @@ using Xunit.Abstractions;
 
 namespace DollarSignEngine.Tests;
 
+[CollectionDefinition("VariableResolver", DisableParallelization = true)]
+public class VariableResolverDefinition { }
+
+[Collection("VariableResolver")]
 public class VariableResolverTests : TestBase
 {
     public VariableResolverTests(ITestOutputHelper outputHelper) : base(outputHelper)

@@ -13,7 +13,8 @@ public class DollarSignEngineException : Exception
     }
 
     /// <summary>
-    /// Initializes a new instance of the DollarSignEngineException class with a specified error message and a reference to the inner exception that is the cause of this exception.
+    /// Initializes a new instance of the DollarSignEngineException class with a specified error message 
+    /// and a reference to the inner exception that is the cause of this exception.
     /// </summary>
     public DollarSignEngineException(string? message, Exception? innerException) : base(message, innerException)
     {

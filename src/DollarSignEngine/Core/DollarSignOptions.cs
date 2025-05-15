@@ -1,6 +1,4 @@
-﻿using System.Globalization;
-
-namespace DollarSignEngine;
+﻿namespace DollarSignEngine;
 
 /// <summary>
 /// Options for configuring the behavior of the DollarSign engine.
@@ -15,7 +13,6 @@ public class DollarSignOptions
 
     /// <summary>
     /// Gets or sets a value indicating whether to enable debug logging.
-    /// Default is false.
     /// </summary>
     public bool EnableDebugLogging { get; set; }
 #if DEBUG
@@ -25,14 +22,13 @@ public class DollarSignOptions
 #endif
 
     /// <summary>
-    /// Gets or sets additional assemblies to reference in the expression evaluation.
+    /// Gets or sets additional namespaces to import in the expression evaluation.
     /// </summary>
     public List<string> AdditionalNamespaces { get; set; } = new();
 
     /// <summary>
     /// Gets or sets a value indicating whether to use strict mode for parameter access.
     /// In strict mode, accessing a non-existent parameter throws an exception instead of returning null.
-    /// Default is false.
     /// </summary>
     public bool StrictParameterAccess { get; set; } = false;
 
@@ -52,22 +48,23 @@ public class DollarSignOptions
     /// Gets or sets a value indicating whether to support dollar sign prefixed variables (${name}).
     /// When true, expressions like "${name}" will be evaluated and "{name}" will be left as-is.
     /// When false (default), expressions like "{name}" will be evaluated and "${name}" will be left as-is.
-    /// Default is false.
     /// </summary>
     public bool SupportDollarSignSyntax { get; set; } = false;
 
     /// <summary>
     /// Gets or sets a value indicating whether to enable expression result caching.
     /// When true, evaluated expressions are cached to improve performance for repeated calls.
-    /// Default is true.
     /// </summary>
     public bool EnableCaching { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether to optimize ternary operator evaluation.
+    /// When true, only the relevant branch of a ternary expression is evaluated based on the condition.
+    /// </summary>
+    public bool OptimizeTernaryEvaluation { get; set; } = true;
 }
 
 /// <summary>
 /// Delegate for resolving variable values from parameter objects.
 /// </summary>
-/// <param name="expression">The expression or variable name to resolve.</param>
-/// <param name="parameter">The parameter object containing variable values.</param>
-/// <returns>The resolved value or null if not resolved.</returns>
 public delegate object? VariableResolverCallback(string expression, object? parameter);

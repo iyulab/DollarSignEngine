@@ -1,4 +1,8 @@
-﻿namespace DollarSignEngine.Formatting;
+﻿using System;
+using System.Globalization;
+using DollarSignEngine.Utilities;
+
+namespace DollarSignEngine.Parsing;
 
 /// <summary>
 /// Applies formatting to expression evaluation results.
@@ -8,27 +12,28 @@ internal class FormatApplier
     /// <summary>
     /// Formats a value according to the format specifier and alignment.
     /// </summary>
-    public string Format(object? value, string? formatSpecifier, int? alignment, CultureInfo? culture, DollarSignOptions option)
+    public string Format(object? value, string? formatSpecifier, int? alignment, CultureInfo? culture, DollarSignOptions options)
     {
         if (value == null)
         {
             return string.Empty;
         }
 
-        // Apply format if provided
-        string result;
+        // Use current culture if not specified
         culture ??= CultureInfo.CurrentCulture;
 
+        // Apply format if provided
+        string result;
         if (!string.IsNullOrEmpty(formatSpecifier) && value is IFormattable formattable)
         {
             try
             {
                 result = formattable.ToString(formatSpecifier, culture);
-                Log.Debug($"Applied format specifier '{formatSpecifier}' to value '{value}', result: '{result}'", option);
+                Log.Debug($"Applied format specifier '{formatSpecifier}' to value '{value}', result: '{result}'", options);
             }
             catch (FormatException ex)
             {
-                Log.Debug($"Format error: {ex.Message}", option);
+                Log.Debug($"Format error: {ex.Message}", options);
                 result = Convert.ToString(value, culture) ?? string.Empty;
             }
         }
@@ -44,12 +49,12 @@ internal class FormatApplier
             if (alignment.Value > 0)
             {
                 result = result.PadLeft(spaces);
-                Log.Debug($"Applied right alignment {alignment.Value} to '{result}'", option);
+                Log.Debug($"Applied right alignment {alignment.Value} to '{result}'", options);
             }
             else if (alignment.Value < 0)
             {
                 result = result.PadRight(spaces);
-                Log.Debug($"Applied left alignment {alignment.Value} to '{result}'", option);
+                Log.Debug($"Applied left alignment {alignment.Value} to '{result}'", options);
             }
         }
 

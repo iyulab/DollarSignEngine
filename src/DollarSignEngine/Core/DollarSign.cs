@@ -1,5 +1,4 @@
 ﻿using DollarSignEngine.Evaluation;
-using DollarSignEngine.Formatting;
 using DollarSignEngine.Parsing;
 
 namespace DollarSignEngine;
@@ -11,7 +10,6 @@ public static class DollarSign
 {
     private static readonly ExpressionCache _expressionCache = new();
     private static readonly TemplateParser _templateParser = new();
-    private static readonly FormatSpecifierParser _formatParser = new();
     private static readonly FormatApplier _formatApplier = new();
     private static readonly ExpressionEvaluator _expressionEvaluator;
 
@@ -21,7 +19,7 @@ public static class DollarSign
     }
 
     /// <summary>
-    /// Asynchronously evaluates a given C# expression as a string and returns the result.
+    /// Asynchronously evaluates a given C# interpolation string and returns the result.
     /// </summary>
     public static async Task<string> EvalAsync(string template, object? parameter = null, DollarSignOptions? options = null)
     {
@@ -43,23 +41,36 @@ public static class DollarSign
             // Process each interpolation part
             foreach (var part in interpolationParts)
             {
-                // Extract format specifier and alignment
-                var (expression, alignment, formatSpecifier) = _formatParser.Parse(part.Expression);
-                part.Alignment = alignment;
-                part.FormatSpecifier = formatSpecifier;
-
                 // Evaluate the expression
-                var result = await Task.Run(() => _expressionEvaluator.Evaluate(expression, parameter, options));
+                object? result;
+
+                try
+                {
+                    Log.Debug($"Processing expression: {part.Expression}", options);
+                    result = await Task.Run(() => _expressionEvaluator.Evaluate(part.Expression, parameter, options));
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug($"Error evaluating expression '{part.Expression}': {ex.Message}", options);
+                    if (options.ThrowOnMissingParameter)
+                    {
+                        throw;
+                    }
+                    result = null;
+                }
 
                 // Format the result
                 var formattedResult = _formatApplier.Format(result, part.FormatSpecifier, part.Alignment, options.CultureInfo, options);
+                Log.Debug($"Formatted result for '{part.Expression}': '{formattedResult}'", options);
 
                 // Replace the placeholder with the formatted result
                 processedTemplate = processedTemplate.Replace(part.Placeholder, formattedResult);
             }
 
             // Restore escaped braces
-            return _templateParser.RestoreEscapedBraces(processedTemplate);
+            var finalResult = _templateParser.RestoreEscapedBraces(processedTemplate);
+            Log.Debug($"Final processed template: {finalResult}", options);
+            return finalResult;
         }
         catch (Exception ex)
         {

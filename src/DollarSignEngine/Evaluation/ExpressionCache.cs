@@ -20,7 +20,6 @@ internal class ExpressionCache
     /// </summary>
     public void CacheLambda(string key, Func<object?, object?> lambda)
     {
-        // Use GetOrAdd to handle race conditions
         _lambdaCache.AddOrUpdate(key, lambda, (_, _) => lambda);
     }
 
