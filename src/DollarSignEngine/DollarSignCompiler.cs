@@ -4,6 +4,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace DollarSignEngine;
 
@@ -137,8 +138,6 @@ internal class DollarSignCompiler
         }
     }
 
-    // Fix for format specifiers in DollarSignCompiler.cs
-
     private string GenerateSourceCode(string expression)
     {
         if (string.IsNullOrEmpty(expression))
@@ -165,15 +164,35 @@ internal class DollarSignCompiler
             return GenerateSimpleStringCode(expression);
         }
 
-        // Extract all variable paths and their format specifiers from the interpolation expressions
+        // Extract all identifiers from the interpolation expressions
         var variablePaths = new HashSet<string>();
         var formatSpecifiers = new Dictionary<string, string>(); // Map of variable path to format specifier
         var interpolations = interpolatedString.DescendantNodes().OfType<InterpolationSyntax>();
 
         foreach (var interpolation in interpolations)
         {
-            // Extract the expression and format specifier
-            ExtractVariableAndFormat(interpolation, variablePaths, formatSpecifiers);
+            // Extract all identifiers from this interpolation
+            ExtractAllIdentifiers(interpolation.Expression, variablePaths);
+
+            // Also extract format specifiers if present
+            if (interpolation.FormatClause != null)
+            {
+                string format = interpolation.FormatClause.ToString().TrimStart(':');
+
+                // Associate format with variable if it's a simple variable
+                if (interpolation.Expression is IdentifierNameSyntax identifier)
+                {
+                    formatSpecifiers[identifier.Identifier.Text] = format;
+                }
+                else if (interpolation.Expression is MemberAccessExpressionSyntax memberAccess)
+                {
+                    string path = ExtractFullPropertyPath(memberAccess);
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        formatSpecifiers[path] = format;
+                    }
+                }
+            }
         }
 
         // Generate the evaluator code
@@ -213,17 +232,51 @@ internal class DollarSignCompiler
                 // Generate interpolation expression
                 code.Append("{");
 
-                // Get the base expression without alignment and format
-                string expressionText = GetExpressionWithoutAlignmentAndFormat(interpolation.Expression);
-                string variablePath = GetVariablePath(expressionText);
-
-                // Replace the variable path with the sanitized variable name
-                if (!string.IsNullOrEmpty(variablePath))
+                // Handle different expression types for interpolation
+                // For conditional expressions, we need to handle type conversion of the condition
+                if (interpolation.Expression is ConditionalExpressionSyntax conditionalExpression)
                 {
-                    expressionText = ReplacePropertyPath(expressionText, variablePath, SanitizeVariableName(variablePath));
-                }
+                    // Get the condition part only
+                    var condition = conditionalExpression.Condition.ToString();
 
-                code.Append(expressionText);
+                    // Replace all variable references in the condition
+                    foreach (var path in variablePaths.OrderByDescending(p => p.Length))
+                    {
+                        condition = ReplaceWholeWord(condition, path, $"Convert.ToBoolean({SanitizeVariableName(path)})");
+                    }
+
+                    // Get the when-true and when-false parts
+                    var whenTrue = conditionalExpression.WhenTrue.ToString();
+                    var whenFalse = conditionalExpression.WhenFalse.ToString();
+
+                    // Replace variable references in these parts too
+                    foreach (var path in variablePaths.OrderByDescending(p => p.Length))
+                    {
+                        whenTrue = ReplaceWholeWord(whenTrue, path, SanitizeVariableName(path));
+                        whenFalse = ReplaceWholeWord(whenFalse, path, SanitizeVariableName(path));
+                    }
+
+                    // Combine to build full conditional expression
+                    code.Append($"({condition} ? {whenTrue} : {whenFalse})");
+                }
+                else
+                {
+                    // For other expression types, replace whole variables with sanitized names
+                    string expressionText = interpolation.Expression.ToString();
+
+                    // Replace all references to variables with sanitized names 
+                    foreach (var path in variablePaths.OrderByDescending(p => p.Length))
+                    {
+                        expressionText = ReplaceWholeWord(expressionText, path, SanitizeVariableName(path));
+                    }
+
+                    
+                    expressionText = Regex.Replace(expressionText, @"\((var.*).s*\?", (m) =>
+                    {
+                        return $"((bool)({m.Groups[1].Value}) ?";
+                    });
+                    code.Append(expressionText);
+                }
 
                 // Add alignment if present
                 if (interpolation.AlignmentClause != null)
@@ -231,14 +284,10 @@ internal class DollarSignCompiler
                     code.Append(interpolation.AlignmentClause.ToString());
                 }
 
-                // Add format if present - either from the interpolation or from our extracted formats
+                // Add format if present
                 if (interpolation.FormatClause != null)
                 {
                     code.Append(interpolation.FormatClause.ToString());
-                }
-                else if (variablePath != null && formatSpecifiers.TryGetValue(variablePath, out var format))
-                {
-                    code.Append($":{format}");
                 }
 
                 code.Append("}");
@@ -259,9 +308,66 @@ internal class DollarSignCompiler
         return code.ToString();
     }
 
+    private void ExtractAllIdentifiers(ExpressionSyntax expression, HashSet<string> identifiers)
+    {
+        // Process simple identifiers
+        if (expression is IdentifierNameSyntax identifier)
+        {
+            identifiers.Add(identifier.Identifier.Text);
+            return;
+        }
+
+        // Process member access expressions (e.g., person.Name)
+        if (expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            string path = ExtractFullPropertyPath(memberAccess);
+            if (!string.IsNullOrEmpty(path))
+            {
+                identifiers.Add(path);
+
+                // Also add the root object name in case it's used elsewhere
+                if (memberAccess.Expression is IdentifierNameSyntax rootIdentifier)
+                {
+                    identifiers.Add(rootIdentifier.Identifier.Text);
+                }
+            }
+            return;
+        }
+
+        // For all other expressions, find all contained identifiers
+        foreach (var node in expression.DescendantNodesAndSelf())
+        {
+            if (node is IdentifierNameSyntax childId && node != expression)
+            {
+                identifiers.Add(childId.Identifier.Text);
+            }
+            else if (node is MemberAccessExpressionSyntax childMemberAccess && node != expression)
+            {
+                string path = ExtractFullPropertyPath(childMemberAccess);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    identifiers.Add(path);
+
+                    // Also add the root object name in case it's used elsewhere
+                    if (childMemberAccess.Expression is IdentifierNameSyntax rootIdentifier)
+                    {
+                        identifiers.Add(rootIdentifier.Identifier.Text);
+                    }
+                }
+            }
+        }
+    }
+
     // Extract the variable name, alignment, and format specifier from an interpolation expression
     private void ExtractVariableAndFormat(InterpolationSyntax interpolation, HashSet<string> variablePaths, Dictionary<string, string> formatSpecifiers)
     {
+        // For complex expressions like ternary operators, we won't extract variables
+        if (interpolation.Expression is ConditionalExpressionSyntax)
+        {
+            // It's a ternary operator, we'll handle it directly in the generated code
+            return;
+        }
+
         // Get the expression text without any alignment or format
         string expressionText = GetExpressionWithoutAlignmentAndFormat(interpolation.Expression);
 
@@ -314,16 +420,24 @@ internal class DollarSignCompiler
     // Get the expression text without any alignment or format specifiers
     private string GetExpressionWithoutAlignmentAndFormat(ExpressionSyntax expression)
     {
+        // If it's a conditional expression (ternary operator), return the full text
+        if (expression is ConditionalExpressionSyntax)
+        {
+            return expression.ToString();
+        }
+
         string text = expression.ToString();
 
         // If contains a comma, it might be an alignment specifier
-        if (text.Contains(','))
+        // But be careful - commas could be part of a method call's parameters too
+        if (text.Contains(',') && !expression.DescendantNodes().OfType<ArgumentSyntax>().Any())
         {
             text = text.Split(new[] { ',' }, 2)[0];
         }
 
         // If contains a colon, it might be a format specifier
-        if (text.Contains(':'))
+        // But be careful - this could be part of a ternary operator
+        if (text.Contains(':') && !expression.DescendantNodes().OfType<ConditionalExpressionSyntax>().Any())
         {
             text = text.Split(new[] { ':' }, 2)[0];
         }
@@ -686,11 +800,23 @@ internal class DollarSignCompiler
     /// </summary>
     private string ReplaceWholeWord(string text, string oldWord, string newWord)
     {
-        // Use regex to replace only whole words
+        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(oldWord))
+            return text;
+
         return System.Text.RegularExpressions.Regex.Replace(
             text,
             $@"\b{System.Text.RegularExpressions.Regex.Escape(oldWord)}\b",
-            newWord);
+            match => {
+                // Make sure we're not replacing part of a property access
+                int position = match.Index;
+                bool hasDotBefore = position > 0 && text[position - 1] == '.';
+                bool hasDotAfter = position + oldWord.Length < text.Length && text[position + oldWord.Length] == '.';
+
+                if (hasDotBefore || hasDotAfter)
+                    return match.Value;
+
+                return newWord;
+            });
     }
 
     /// <summary>
