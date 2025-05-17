@@ -1,6 +1,6 @@
 # DollarSignEngine
 
-Dynamically evaluate and interpolate C# expressions at runtime with ease, leveraging a powerful expression evaluation engine.
+Dynamically evaluate and interpolate C# expressions at runtime with ease, leveraging the power of the Roslyn compiler.
 
 ## Introduction
 
@@ -27,7 +27,7 @@ The DollarSignEngine is a robust C# library designed to simplify the process of 
 - **Custom Variable Resolution:** Provide custom variable resolvers for advanced use cases.
 - **Multiple Syntax Options:** Support for both standard C# interpolation `{expression}` and dollar-sign `${expression}` syntax.
 - **Comprehensive Error Handling:** Provides detailed exceptions for compilation and runtime errors to ease debugging.
-- **Powerful Expression Evaluation:** Uses DynamicExpresso internally to support a full range of C# expressions including ternary operators, arithmetic operations, and LINQ expressions.
+- **Powerful Expression Evaluation:** Uses the Roslyn compiler internally for full language compliance, supporting the complete range of C# expressions including LINQ, ternary operators, and more.
 
 ## Installation
 
@@ -273,7 +273,7 @@ catch (DollarSignEngineException ex)
 
 ## Implementation Details
 
-DollarSignEngine uses [DynamicExpresso](https://github.com/dynamicexpresso/DynamicExpresso) internally for expression evaluation. This provides robust support for a wide range of C# expressions, including:
+DollarSignEngine uses the Roslyn Compiler API (Microsoft.CodeAnalysis) internally for expression evaluation. This provides robust support for the complete C# language syntax, including:
 
 - Arithmetic operations
 - Ternary operators
@@ -281,11 +281,23 @@ DollarSignEngine uses [DynamicExpresso](https://github.com/dynamicexpresso/Dynam
 - LINQ queries
 - Property access
 - Collection indexing
+- Extension methods
+- Lambda expressions
 
-The library handles parsing templates, extracting expressions, evaluating them using DynamicExpresso, and applying format specifiers before assembling the final output.
+The library handles parsing templates, extracting expressions, compiling them using Roslyn, and applying format specifiers before assembling the final output.
+
+## Advantages of Using Roslyn
+
+- **Full Language Compliance**: Complete support for the entire C# language specification, ensuring that expressions behave exactly as they would in compiled C# code.
+- **Better Performance**: Compiled expressions offer superior performance compared to interpreted alternatives.
+- **Stronger Type Checking**: Leverages the full .NET type system for better compile-time validation.
+- **Enhanced Security**: Reduced risk of injection attacks through proper compilation.
+- **IDE-like Error Messages**: Detailed error reporting consistent with Visual Studio for easier debugging.
+- **Future Compatibility**: Automatically stays in sync with C# language evolution as the Roslyn compiler is updated.
 
 ## Performance Considerations
 
-- Expression evaluation results are cached when possible to improve performance for repeated calls
-- Avoid unnecessary complex expressions in performance-critical code paths
+- Compiled expressions are cached to improve performance for repeated calls
+- First-time compilation might have a small overhead, but subsequent evaluations are significantly faster
 - For templates that are evaluated many times with different parameters, consider reusing the same template string
+- The compiler optimizes expressions for maximum execution speed

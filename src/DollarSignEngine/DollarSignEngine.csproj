@@ -8,9 +8,8 @@
 	<Title>DollarSignEngine</Title>
   </PropertyGroup>
 
-	<ItemGroup>
-		<PackageReference Include="DynamicExpresso.Core" Version="2.19.0" />
-		<!--<PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.13.0" />-->
-		<!--<PackageReference Include="Microsoft.CSharp" Version="4.7.0" />-->
-	</ItemGroup>
+		<ItemGroup>
+				<PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+				<PackageReference Include="System.Runtime.Loader" Version="4.3.0" />
+		</ItemGroup>
 </Project>
