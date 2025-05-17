@@ -56,9 +56,10 @@ public class FormatSpecifierTests : TestBase
     public async Task Should_Match_CSharp_DateTimeFormatting()
     {
         // Arrange
+        var date = new DateTime(2023, 10, 15, 14, 30, 25);
         var parameters = new
         {
-            date = new DateTime(2023, 10, 15, 14, 30, 25)
+            date = date
         };
 
         // 다양한 날짜 형식 지정자
@@ -81,18 +82,18 @@ public class FormatSpecifierTests : TestBase
 
         // Assert
         var expected =
-            $"Default: {parameters.date}\n" +
-            $"Short Date(d): {parameters.date:d}\n" +
-            $"Long Date(D): {parameters.date:D}\n" +
-            $"Full(F): {parameters.date:F}\n" +
-            $"General(G): {parameters.date:G}\n" +
-            $"Month/Day(M): {parameters.date:M}\n" +
-            $"Sortable(s): {parameters.date:s}\n" +
-            $"Short Time(t): {parameters.date:t}\n" +
-            $"Long Time(T): {parameters.date:T}\n" +
-            $"Universal(U): {parameters.date:U}\n" +
-            $"Custom(yyyy-MM-dd): {parameters.date:yyyy-MM-dd}\n" +
-            $"Custom(HH:mm:ss): {parameters.date:HH:mm:ss}";
+            $"Default: {date}\n" +
+            $"Short Date(d): {date:d}\n" +
+            $"Long Date(D): {date:D}\n" +
+            $"Full(F): {date:F}\n" +
+            $"General(G): {date:G}\n" +
+            $"Month/Day(M): {date:M}\n" +
+            $"Sortable(s): {date:s}\n" +
+            $"Short Time(t): {date:t}\n" +
+            $"Long Time(T): {date:T}\n" +
+            $"Universal(U): {date:U}\n" +
+            $"Custom(yyyy-MM-dd): {date:yyyy-MM-dd}\n" +
+            $"Custom(HH:mm:ss): {date:HH:mm:ss}";
 
         result.Should().Be(expected);
     }

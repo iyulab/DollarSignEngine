@@ -1,5 +1,7 @@
 ﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 
@@ -29,11 +31,7 @@ internal class DollarSignCompiler
         {
             // Generate source code
             string sourceCode = GenerateSourceCode(expression);
-
-            // For debugging
-            Console.WriteLine($"Generated source code for expression '{expression}':");
-            Console.WriteLine(sourceCode);
-
+            Console.WriteLine($"Generated source code for expression: {sourceCode}");
             // Compile the source code
             Assembly assembly;
             try
@@ -42,7 +40,6 @@ internal class DollarSignCompiler
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Compilation error: {ex.Message}");
                 throw new CompilationException($"Failed to compile expression: {ex.Message}", sourceCode);
             }
 
@@ -57,37 +54,132 @@ internal class DollarSignCompiler
         }
         catch (CompilationException)
         {
-            // Already a CompilationException, just rethrow
             throw;
         }
         catch (DollarSignEngineException)
         {
-            // Already a DollarSignEngineException, just rethrow
             throw;
         }
         catch (Exception ex)
         {
-            // Wrap all other exceptions
             throw new CompilationException($"Failed to compile expression: {ex.Message}", expression);
         }
     }
 
-    /// <summary>
-    /// Generate source code for evaluating an expression
-    /// </summary>
+    // Simple class to parse interpolation expressions
+    private class SimpleInterpolationParser
+    {
+        public class InterpolationPart
+        {
+            public string Content { get; set; }
+            public bool IsVariable { get; set; }
+
+            public InterpolationPart(string content, bool isVariable)
+            {
+                Content = content;
+                IsVariable = isVariable;
+            }
+        }
+
+        public InterpolationPart[] Parse(string template)
+        {
+            var result = new List<InterpolationPart>();
+            int pos = 0;
+
+            while (pos < template.Length)
+            {
+                // Find the next variable
+                int openBrace = template.IndexOf('{', pos);
+
+                if (openBrace == -1)
+                {
+                    // No more variables, add the rest as text
+                    if (pos < template.Length)
+                    {
+                        result.Add(new InterpolationPart(template.Substring(pos), false));
+                    }
+                    break;
+                }
+
+                // Check if it's an escaped brace
+                if (openBrace + 1 < template.Length && template[openBrace + 1] == '{')
+                {
+                    // Add text up to and including one brace
+                    result.Add(new InterpolationPart(template.Substring(pos, openBrace - pos + 1), false));
+                    pos = openBrace + 2; // Skip both braces
+                    continue;
+                }
+
+                // Add text before the variable
+                if (openBrace > pos)
+                {
+                    result.Add(new InterpolationPart(template.Substring(pos, openBrace - pos), false));
+                }
+
+                // Find the closing brace
+                int closeBrace = template.IndexOf('}', openBrace + 1);
+                if (closeBrace == -1)
+                {
+                    // No closing brace, treat the rest as text
+                    result.Add(new InterpolationPart(template.Substring(pos), false));
+                    break;
+                }
+
+                // Extract the variable name
+                string varName = template.Substring(openBrace + 1, closeBrace - openBrace - 1).Trim();
+                result.Add(new InterpolationPart(varName, true));
+
+                // Move past the closing brace
+                pos = closeBrace + 1;
+            }
+
+            return result.ToArray();
+        }
+    }
+
+    // Fix for format specifiers in DollarSignCompiler.cs
+
     private string GenerateSourceCode(string expression)
     {
         if (string.IsNullOrEmpty(expression))
             return GenerateEmptyStringCode();
 
-        // Parse the expression into segments using a carefully designed algorithm
-        var (segments, variables) = ParseExpression(expression);
+        // For strings with newlines or tabs, we need a different approach
+        if (expression.Contains('\n') || expression.Contains('\r') || expression.Contains('\t'))
+        {
+            return GenerateCodeForStringWithSpecialChars(expression);
+        }
 
-        // Generate the code
+        // Regular approach for strings without special characters
+        string wrappedExpression = $"$\"{expression}\"";
+
+        // Use Roslyn to parse the interpolated string expression
+        var tree = CSharpSyntaxTree.ParseText(wrappedExpression);
+        var root = tree.GetRoot();
+
+        // Find all interpolated string expressions in the parsed code
+        var interpolatedString = root.DescendantNodes().OfType<InterpolatedStringExpressionSyntax>().FirstOrDefault();
+        if (interpolatedString == null)
+        {
+            // If not an interpolated string, return simple string code
+            return GenerateSimpleStringCode(expression);
+        }
+
+        // Extract all variable paths and their format specifiers from the interpolation expressions
+        var variablePaths = new HashSet<string>();
+        var formatSpecifiers = new Dictionary<string, string>(); // Map of variable path to format specifier
+        var interpolations = interpolatedString.DescendantNodes().OfType<InterpolationSyntax>();
+
+        foreach (var interpolation in interpolations)
+        {
+            // Extract the expression and format specifier
+            ExtractVariableAndFormat(interpolation, variablePaths, formatSpecifiers);
+        }
+
+        // Generate the evaluator code
         var code = new StringBuilder();
         code.AppendLine("using System;");
         code.AppendLine("using System.Globalization;");
-        code.AppendLine("using System.Text;");
         code.AppendLine();
         code.AppendLine("namespace DynamicInterpolation");
         code.AppendLine("{");
@@ -100,76 +192,64 @@ internal class DollarSignCompiler
         code.AppendLine("            try");
         code.AppendLine("            {");
 
-        // Declare variables (only once per unique variable name)
-        int varIndex = 0;
-        var varMap = new Dictionary<string, string>();
-        foreach (var variable in variables)
+        // Generate variable declarations for all identified variable paths
+        foreach (var path in variablePaths)
         {
-            string safeVarName = $"var{varIndex++}";
-            varMap[variable] = safeVarName;
-            code.AppendLine($"                object _{safeVarName} = resolver(\"{variable}\");");
+            code.AppendLine($"                object {SanitizeVariableName(path)} = resolver(\"{path}\");");
         }
 
-        // StringBuilder를 사용하여 결과 구성
-        code.AppendLine("                var result = new StringBuilder();");
+        // Generate the interpolated string directly
+        code.Append("                return $\"");
 
-        foreach (var segment in segments)
+        foreach (var content in interpolatedString.Contents)
         {
-            if (segment.IsText)
+            if (content is InterpolatedStringTextSyntax textSyntax)
             {
-                if (!string.IsNullOrEmpty(segment.Content))
-                {
-                    // 텍스트 세그먼트에서 특수 문자를 C# 문자열 리터럴에서 사용 가능한 이스케이프 시퀀스로 변환
-                    string escapedText = segment.Content
-                        .Replace("\\", "\\\\")    // 백슬래시 먼저 이스케이프
-                        .Replace("\"", "\\\"")    // 따옴표 이스케이프
-                        .Replace("\n", "\\n")     // 줄바꿈을 \n으로 이스케이프
-                        .Replace("\r", "\\r")     // 캐리지 리턴을 \r로 이스케이프
-                        .Replace("\t", "\\t");    // 탭을 \t로 이스케이프
-
-                    code.AppendLine($"                result.Append(\"{escapedText}\");");
-                }
+                // Add text content directly
+                code.Append(EscapeString(textSyntax.TextToken.ValueText));
             }
-            else if (segment.IsVariable)
+            else if (content is InterpolationSyntax interpolation)
             {
-                string safeVarName = varMap[segment.Content];
+                // Generate interpolation expression
+                code.Append("{");
 
-                if (string.IsNullOrEmpty(segment.AlignmentSpecifier) && string.IsNullOrEmpty(segment.FormatSpecifier))
+                // Get the base expression without alignment and format
+                string expressionText = GetExpressionWithoutAlignmentAndFormat(interpolation.Expression);
+                string variablePath = GetVariablePath(expressionText);
+
+                // Replace the variable path with the sanitized variable name
+                if (!string.IsNullOrEmpty(variablePath))
                 {
-                    // 형식 지정자가 없는 경우 - ToString() 사용
-                    code.AppendLine($"                result.Append(_{safeVarName} == null ? \"\" : _{safeVarName}.ToString());");
+                    expressionText = ReplacePropertyPath(expressionText, variablePath, SanitizeVariableName(variablePath));
                 }
-                else
+
+                code.Append(expressionText);
+
+                // Add alignment if present
+                if (interpolation.AlignmentClause != null)
                 {
-                    // 형식 지정자나 정렬 지정자가 있는 경우
-                    string formatString = "{0";
-
-                    // 정렬 지정자 추가
-                    if (!string.IsNullOrEmpty(segment.AlignmentSpecifier))
-                    {
-                        formatString += segment.AlignmentSpecifier;
-                    }
-
-                    // 형식 지정자 추가
-                    if (!string.IsNullOrEmpty(segment.FormatSpecifier))
-                    {
-                        formatString += segment.FormatSpecifier;
-                    }
-
-                    formatString += "}";
-
-                    // string.Format 사용
-                    code.AppendLine($"                result.Append(string.Format(CultureInfo.CurrentCulture, \"{formatString}\", _{safeVarName} ?? \"\"));");
+                    code.Append(interpolation.AlignmentClause.ToString());
                 }
+
+                // Add format if present - either from the interpolation or from our extracted formats
+                if (interpolation.FormatClause != null)
+                {
+                    code.Append(interpolation.FormatClause.ToString());
+                }
+                else if (variablePath != null && formatSpecifiers.TryGetValue(variablePath, out var format))
+                {
+                    code.Append($":{format}");
+                }
+
+                code.Append("}");
             }
         }
 
-        code.AppendLine("                return result.ToString();");
+        code.AppendLine("\";");
         code.AppendLine("            }");
         code.AppendLine("            catch (Exception ex)");
         code.AppendLine("            {");
         code.AppendLine("                Console.WriteLine($\"Error in string interpolation: {ex.Message}\");");
-        code.AppendLine("                Console.WriteLine(ex.StackTrace);");
         code.AppendLine("                return string.Empty;");
         code.AppendLine("            }");
         code.AppendLine("        }");
@@ -179,291 +259,511 @@ internal class DollarSignCompiler
         return code.ToString();
     }
 
-    private (List<ExpressionSegment> Segments, HashSet<string> Variables) ParseExpression(string expression)
+    // Extract the variable name, alignment, and format specifier from an interpolation expression
+    private void ExtractVariableAndFormat(InterpolationSyntax interpolation, HashSet<string> variablePaths, Dictionary<string, string> formatSpecifiers)
     {
-        var segments = new List<ExpressionSegment>();
-        var variables = new HashSet<string>();
+        // Get the expression text without any alignment or format
+        string expressionText = GetExpressionWithoutAlignmentAndFormat(interpolation.Expression);
 
-        int i = 0;
-        StringBuilder textBuffer = new StringBuilder();
-
-        // Helper to add a text segment
-        void AddTextSegment()
+        // Get the format specifier if present
+        string format = null;
+        if (interpolation.FormatClause != null)
         {
-            if (textBuffer.Length > 0)
+            format = interpolation.FormatClause.ToString().TrimStart(':');
+        }
+
+        // Get the alignment specifier if present
+        string alignment = null;
+        if (interpolation.AlignmentClause != null)
+        {
+            alignment = interpolation.AlignmentClause.ToString().TrimStart(',');
+        }
+
+        // Now extract the variable path from the expression
+        string variablePath = null;
+
+        // Handle simple identifier
+        if (interpolation.Expression is IdentifierNameSyntax identifier)
+        {
+            variablePath = identifier.Identifier.Text;
+        }
+        // Handle member access expression
+        else if (interpolation.Expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            variablePath = ExtractFullPropertyPath(memberAccess);
+        }
+        // Handle more complex cases - try to extract from the expression text
+        else
+        {
+            variablePath = GetVariablePath(expressionText);
+        }
+
+        // Add to our collections if we found a variable path
+        if (!string.IsNullOrEmpty(variablePath))
+        {
+            variablePaths.Add(variablePath);
+
+            // Store the format specifier if we have one
+            if (!string.IsNullOrEmpty(format))
             {
-                segments.Add(new ExpressionSegment
-                {
-                    IsText = true,
-                    IsVariable = false,
-                    Content = textBuffer.ToString()
-                });
-                textBuffer.Clear();
+                formatSpecifiers[variablePath] = format;
+            }
+        }
+    }
+
+    // Get the expression text without any alignment or format specifiers
+    private string GetExpressionWithoutAlignmentAndFormat(ExpressionSyntax expression)
+    {
+        string text = expression.ToString();
+
+        // If contains a comma, it might be an alignment specifier
+        if (text.Contains(','))
+        {
+            text = text.Split(new[] { ',' }, 2)[0];
+        }
+
+        // If contains a colon, it might be a format specifier
+        if (text.Contains(':'))
+        {
+            text = text.Split(new[] { ':' }, 2)[0];
+        }
+
+        return text;
+    }
+
+    // Extract the variable path from an expression text
+    private string GetVariablePath(string expressionText)
+    {
+        // Handle simple variable
+        if (!expressionText.Contains('.') && !expressionText.Contains('(') &&
+            !expressionText.Contains(')') && !expressionText.Contains(' '))
+        {
+            return expressionText;
+        }
+
+        // Handle member access (simple case)
+        if (expressionText.Contains('.') && !expressionText.Contains('(') &&
+            !expressionText.Contains(')') && !expressionText.Contains(' '))
+        {
+            return expressionText;
+        }
+
+        // More complex expressions - we'd need more sophisticated parsing
+        return null;
+    }
+
+    // Get the expression text without any format specifier
+    private string GetExpressionWithoutFormat(ExpressionSyntax expression)
+    {
+        string text = expression.ToString();
+
+        // If contains a colon, it might be a format specifier
+        if (text.Contains(':'))
+        {
+            return text.Split(new[] { ':' }, 2)[0];
+        }
+
+        return text;
+    }
+
+    // Special version to handle strings with special characters and format specifiers
+    private string GenerateCodeForStringWithSpecialChars(string expression)
+    {
+        // Extract variable names and format specifiers from the expression
+        var parser = new StringInterpolationParser();
+        var parts = parser.Parse(expression);
+
+        // Collect variable paths and format specifiers
+        var variablePaths = new HashSet<string>();
+
+        foreach (var part in parts)
+        {
+            if (part.IsVariable)
+            {
+                variablePaths.Add(part.Content);
             }
         }
 
-        while (i < expression.Length)
+        // Generate the evaluator code
+        var code = new StringBuilder();
+        code.AppendLine("using System;");
+        code.AppendLine("using System.Globalization;");
+        code.AppendLine();
+        code.AppendLine("namespace DynamicInterpolation");
+        code.AppendLine("{");
+        code.AppendLine("    public static class Evaluator");
+        code.AppendLine("    {");
+        code.AppendLine("        public delegate object ResolverDelegate(string name);");
+        code.AppendLine();
+        code.AppendLine("        public static string Evaluate(ResolverDelegate resolver)");
+        code.AppendLine("        {");
+        code.AppendLine("            try");
+        code.AppendLine("            {");
+
+        // Generate variable declarations for all identified variables
+        foreach (var path in variablePaths)
         {
-            // Handle special cases first
+            code.AppendLine($"                object {SanitizeVariableName(path)} = resolver(\"{path}\");");
+        }
 
-            // 1. Escaped opening brace: {{
-            if (i + 1 < expression.Length && expression[i] == '{' && expression[i + 1] == '{')
+        // Build the string using string.Concat for better control
+        code.AppendLine("                return string.Concat(");
+
+        for (int i = 0; i < parts.Length; i++)
+        {
+            var part = parts[i];
+            code.Append("                    ");
+
+            if (part.IsVariable)
             {
-                // Add the single { to the output directly
-                textBuffer.Append('{');
-                i += 2; // Skip both braces
-                continue;
-            }
+                string variableName = SanitizeVariableName(part.Content);
 
-            // 2. Escaped closing brace: }}
-            if (i + 1 < expression.Length && expression[i] == '}' && expression[i + 1] == '}')
-            {
-                // Add the single } to the output directly
-                textBuffer.Append('}');
-                i += 2; // Skip both braces
-                continue;
-            }
-
-            // 3. Variable expression: {variable}
-            if (expression[i] == '{')
-            {
-                // Add any accumulated text
-                AddTextSegment();
-
-                int start = i + 1; // Skip the opening brace
-                i = start; // Start searching from here
-
-                // Find the matching closing brace, handling nested expressions correctly
-                int braceCount = 1;
-                bool inStringLiteral = false;
-                bool foundClosing = false;
-
-                while (i < expression.Length) // Loop to find matching '}'
+                // Format with alignment and/or format specifier if present
+                if (part.Alignment != null || part.Format != null)
                 {
-                    char c = expression[i];
+                    code.Append("string.Format(CultureInfo.CurrentCulture, \"{0");
 
-                    // Handle string literals (to ignore braces inside string literals)
-                    if (c == '"' && (i == 0 || expression[i - 1] != '\\'))
+                    // Add alignment if present
+                    if (part.Alignment != null)
                     {
-                        inStringLiteral = !inStringLiteral;
-                        i++;
-                        continue;
+                        code.Append($",{part.Alignment}");
                     }
 
-                    if (!inStringLiteral)
+                    // Add format if present
+                    if (part.Format != null)
                     {
-                        if (c == '{')
-                        {
-                            braceCount++;
-                        }
-                        else if (c == '}')
-                        {
-                            braceCount--;
-                            if (braceCount == 0)
-                            {
-                                // Found the matching closing brace
-                                foundClosing = true;
-                                break;
-                            }
-                        }
-                    }
-                    i++;
-                }
-
-                if (foundClosing)
-                {
-                    // Extract the variable content (excluding the braces)
-                    string varContent = expression.Substring(start, i - start);
-
-                    // Parse the variable name, alignment, and format specifier
-                    string varName = varContent;
-                    string alignmentSpecifier = string.Empty;
-                    string formatSpecifier = string.Empty;
-
-                    // Simple case - no format or alignment specifiers
-                    if (!varContent.Contains(',') && !varContent.Contains(':'))
-                    {
-                        varName = varContent.Trim();
-                    }
-                    else
-                    {
-                        // Parse for alignment and format specifiers
-                        bool inVarString = false;
-                        int commaPos = -1;
-                        int colonPos = -1;
-
-                        // Find positions of comma and colon outside of string literals
-                        for (int j = 0; j < varContent.Length; j++)
-                        {
-                            char c = varContent[j];
-
-                            // Track string literals
-                            if (c == '"' && (j == 0 || varContent[j - 1] != '\\'))
-                            {
-                                inVarString = !inVarString;
-                                continue;
-                            }
-
-                            if (!inVarString)
-                            {
-                                // First comma outside a string literal is alignment specifier
-                                if (c == ',' && commaPos == -1)
-                                {
-                                    commaPos = j;
-                                }
-                                // First colon outside a string literal is format specifier
-                                else if (c == ':' && colonPos == -1)
-                                {
-                                    colonPos = j;
-                                }
-                            }
-                        }
-
-                        // Extract the parts based on what we found
-                        if (colonPos >= 0)
-                        {
-                            if (commaPos >= 0 && commaPos < colonPos)
-                            {
-                                // We have both alignment and format: {name,align:format}
-                                varName = varContent.Substring(0, commaPos).Trim();
-                                alignmentSpecifier = varContent.Substring(commaPos, colonPos - commaPos);
-                                formatSpecifier = varContent.Substring(colonPos);
-                            }
-                            else
-                            {
-                                // We have only format: {name:format}
-                                varName = varContent.Substring(0, colonPos).Trim();
-                                formatSpecifier = varContent.Substring(colonPos);
-                            }
-                        }
-                        else if (commaPos >= 0)
-                        {
-                            // We have only alignment: {name,align}
-                            varName = varContent.Substring(0, commaPos).Trim();
-                            alignmentSpecifier = varContent.Substring(commaPos);
-                        }
+                        code.Append($":{part.Format}");
                     }
 
-                    // Add the variable to our list
-                    variables.Add(varName);
-
-                    // Add a variable segment
-                    segments.Add(new ExpressionSegment
-                    {
-                        IsText = false,
-                        IsVariable = true,
-                        Content = varName,
-                        AlignmentSpecifier = alignmentSpecifier,
-                        FormatSpecifier = formatSpecifier
-                    });
-
-                    i++; // Skip the closing brace for the outer loop
+                    code.Append($"}}\", {variableName})");
                 }
                 else
                 {
-                    // No matching closing brace, treat the opening brace as text
-                    textBuffer.Append('{');
-                    i = start; // Reset position to just after the opening brace
+                    // No formatting needed
+                    code.Append($"{variableName}?.ToString() ?? string.Empty");
                 }
             }
             else
             {
-                // Regular text character - 특수 문자도 그대로 보존
-                textBuffer.Append(expression[i]);
-                i++;
+                // Escape the text for C# string literal
+                code.Append($"\"{EscapeString(part.Content)}\"");
+            }
+
+            // Add comma if not the last item
+            if (i < parts.Length - 1)
+            {
+                code.AppendLine(",");
+            }
+            else
+            {
+                code.AppendLine();
             }
         }
 
-        // Add any remaining text
-        AddTextSegment();
+        code.AppendLine("                );");
+        code.AppendLine("            }");
+        code.AppendLine("            catch (Exception ex)");
+        code.AppendLine("            {");
+        code.AppendLine("                Console.WriteLine($\"Error in string interpolation: {ex.Message}\");");
+        code.AppendLine("                return string.Empty;");
+        code.AppendLine("            }");
+        code.AppendLine("        }");
+        code.AppendLine("    }");
+        code.AppendLine("}");
 
-        return (segments, variables);
+        return code.ToString();
     }
 
-    // Helper method to parse variable parts (name, alignment, format)
-    private string ParseVariableParts(string varContent, out string alignmentSpecifier, out string formatSpecifier)
+    // Improved parser class for string interpolation that handles format and alignment specifiers
+    private class StringInterpolationParser
     {
-        alignmentSpecifier = string.Empty;
-        formatSpecifier = string.Empty;
-
-        // Simple case - no specifiers
-        if (!varContent.Contains(',') && !varContent.Contains(':'))
+        public class InterpolationPart
         {
-            return varContent.Trim();
-        }
+            public string Content { get; set; }
+            public bool IsVariable { get; set; }
+            public string? Alignment { get; set; }
+            public string? Format { get; set; }
 
-        // Handle more complex cases with string analysis
-        string varName = varContent;
-
-        // Track string literals to avoid parsing specifiers inside them
-        bool inStringLiteral = false;
-        int commaPos = -1;
-        int colonPos = -1;
-
-        // Find positions of comma and colon outside of string literals
-        for (int i = 0; i < varContent.Length; i++)
-        {
-            char c = varContent[i];
-
-            // Track string literals
-            if (c == '"' && (i == 0 || varContent[i - 1] != '\\'))
+            public InterpolationPart(string content, bool isVariable, string? alignment = null, string? format = null)
             {
-                inStringLiteral = !inStringLiteral;
-                continue;
-            }
-
-            if (!inStringLiteral)
-            {
-                // First comma outside a string literal is alignment specifier
-                if (c == ',' && commaPos == -1)
-                {
-                    commaPos = i;
-                }
-                // First colon outside a string literal is format specifier
-                else if (c == ':' && colonPos == -1)
-                {
-                    colonPos = i;
-                }
+                Content = content;
+                IsVariable = isVariable;
+                Alignment = alignment;
+                Format = format;
             }
         }
 
-        // Extract the parts based on what we found
-        if (colonPos >= 0)
+        public InterpolationPart[] Parse(string template)
         {
-            if (commaPos >= 0 && commaPos < colonPos)
+            var result = new List<InterpolationPart>();
+            int pos = 0;
+
+            while (pos < template.Length)
             {
-                // We have both alignment and format: {name,align:format}
-                varName = varContent.Substring(0, commaPos).Trim();
-                alignmentSpecifier = varContent.Substring(commaPos, colonPos - commaPos);
-                formatSpecifier = varContent.Substring(colonPos);
+                // Find the next variable
+                int openBrace = template.IndexOf('{', pos);
+
+                if (openBrace == -1)
+                {
+                    // No more variables, add the rest as text
+                    if (pos < template.Length)
+                    {
+                        result.Add(new InterpolationPart(template.Substring(pos), false));
+                    }
+                    break;
+                }
+
+                // Check if it's an escaped brace
+                if (openBrace + 1 < template.Length && template[openBrace + 1] == '{')
+                {
+                    // Add text up to and including one brace
+                    result.Add(new InterpolationPart(template.Substring(pos, openBrace - pos + 1), false));
+                    pos = openBrace + 2; // Skip both braces
+                    continue;
+                }
+
+                // Add text before the variable
+                if (openBrace > pos)
+                {
+                    result.Add(new InterpolationPart(template.Substring(pos, openBrace - pos), false));
+                }
+
+                // Find the closing brace
+                int closeBrace = template.IndexOf('}', openBrace + 1);
+                if (closeBrace == -1)
+                {
+                    // No closing brace, treat the rest as text
+                    result.Add(new InterpolationPart(template.Substring(pos), false));
+                    break;
+                }
+
+                // Extract the variable expression - this could include alignment and format specifiers
+                string varExpression = template.Substring(openBrace + 1, closeBrace - openBrace - 1).Trim();
+
+                // Parse for alignment and format specifiers
+                string variableName = varExpression;
+                string? alignment = null;
+                string? format = null;
+
+                // Check for format specifier first (comes after a colon)
+                if (variableName.Contains(':'))
+                {
+                    var segments = variableName.Split(':', 2);
+                    variableName = segments[0].Trim();
+                    format = segments[1].Trim();
+                }
+
+                // Check for alignment specifier (comes after a comma)
+                if (variableName.Contains(','))
+                {
+                    var segments = variableName.Split(',', 2);
+                    variableName = segments[0].Trim();
+                    alignment = segments[1].Trim();
+                }
+
+                result.Add(new InterpolationPart(variableName, true, alignment, format));
+
+                // Move past the closing brace
+                pos = closeBrace + 1;
+            }
+
+            return result.ToArray();
+        }
+    }
+
+    // Extract full property paths from expression (including dotted paths)
+    private void ExtractPropertyPaths(ExpressionSyntax expression, HashSet<string> paths)
+    {
+        // Case 1: Simple identifier - just a variable name
+        if (expression is IdentifierNameSyntax identifier)
+        {
+            paths.Add(identifier.Identifier.Text);
+            return;
+        }
+
+        // Case 2: Member access - nested property like Address.City
+        if (expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            // Extract the full path (Address.City)
+            string path = ExtractFullPropertyPath(memberAccess);
+            if (!string.IsNullOrEmpty(path))
+            {
+                paths.Add(path);
+            }
+            return;
+        }
+
+        // Recursively process all contained expressions
+        foreach (var childNode in expression.DescendantNodesAndSelf().OfType<ExpressionSyntax>())
+        {
+            if (childNode is IdentifierNameSyntax childIdentifier)
+            {
+                paths.Add(childIdentifier.Identifier.Text);
+            }
+            else if (childNode is MemberAccessExpressionSyntax childMemberAccess)
+            {
+                string path = ExtractFullPropertyPath(childMemberAccess);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    paths.Add(path);
+                }
+            }
+        }
+    }
+
+    // Extract the full path from a member access expression (e.g., "Address.City")
+    private string ExtractFullPropertyPath(MemberAccessExpressionSyntax memberAccess)
+    {
+        // Build the path from right to left (City <- Address)
+        var parts = new List<string>();
+
+        // Add the rightmost identifier (the property name)
+        parts.Add(memberAccess.Name.Identifier.Text);
+
+        // Walk up the tree to get the full path
+        ExpressionSyntax current = memberAccess.Expression;
+
+        while (true)
+        {
+            if (current is IdentifierNameSyntax identifier)
+            {
+                // Found the root identifier, add it and break
+                parts.Add(identifier.Identifier.Text);
+                break;
+            }
+            else if (current is MemberAccessExpressionSyntax nestedMemberAccess)
+            {
+                // Add this segment and continue with the expression
+                parts.Add(nestedMemberAccess.Name.Identifier.Text);
+                current = nestedMemberAccess.Expression;
             }
             else
             {
-                // We have only format: {name:format}
-                varName = varContent.Substring(0, colonPos).Trim();
-                formatSpecifier = varContent.Substring(colonPos);
+                // Not a simple property path, return empty
+                return string.Empty;
             }
         }
-        else if (commaPos >= 0)
+
+        // Reverse and join with dots
+        parts.Reverse();
+        return string.Join(".", parts);
+    }
+
+    // Replace a property path with a variable name in an expression
+    private string ReplacePropertyPath(string expression, string path, string variableName)
+    {
+        // Split the path to handle nested properties
+        var parts = path.Split('.');
+
+        if (parts.Length == 1)
         {
-            // We have only alignment: {name,align}
-            varName = varContent.Substring(0, commaPos).Trim();
-            alignmentSpecifier = varContent.Substring(commaPos);
+            // Simple variable, just replace if it's a whole word
+            return ReplaceWholeWord(expression, path, variableName);
         }
 
-        return varName;
+        // For nested properties, we need to match the exact path
+        if (expression == path)
+        {
+            return variableName;
+        }
+
+        // Otherwise, leave it as is
+        return expression;
     }
 
     /// <summary>
-    /// Represents a segment of an interpolated string expression
+    /// Sanitizes a variable name for use in generated code
     /// </summary>
-    private class ExpressionSegment
+    private string SanitizeVariableName(string name)
     {
-        public bool IsText { get; set; }
-        public bool IsVariable { get; set; }
-        public string Content { get; set; } = string.Empty;
-        public string AlignmentSpecifier { get; set; } = string.Empty;
-        public string FormatSpecifier { get; set; } = string.Empty;
+        // Ensure variable names don't conflict with C# keywords
+        // and are valid identifiers
+        return $"var_{name.Replace(".", "_")}";
+    }
+
+    /// <summary>
+    /// Replaces a whole word in a string
+    /// </summary>
+    private string ReplaceWholeWord(string text, string oldWord, string newWord)
+    {
+        // Use regex to replace only whole words
+        return System.Text.RegularExpressions.Regex.Replace(
+            text,
+            $@"\b{System.Text.RegularExpressions.Regex.Escape(oldWord)}\b",
+            newWord);
+    }
+
+    /// <summary>
+    /// Escapes special characters in a string for C# code generation
+    /// </summary>
+    private string EscapeString(string text)
+    {
+        return text
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"")
+            .Replace("\r", "\\r")
+            .Replace("\n", "\\n")
+            .Replace("\t", "\\t");
+    }
+
+    /// <summary>
+    /// Checks if a string matches a standalone identifier
+    /// </summary>
+    private bool IsStandaloneIdentifier(string text, string identifier)
+    {
+        int index = text.IndexOf(identifier);
+        if (index < 0) return false;
+
+        bool validStart = index == 0 || !char.IsLetterOrDigit(text[index - 1]) && text[index - 1] != '_';
+        bool validEnd = index + identifier.Length == text.Length ||
+                        !char.IsLetterOrDigit(text[index + identifier.Length]) &&
+                        text[index + identifier.Length] != '_';
+
+        return validStart && validEnd;
+    }
+
+    /// <summary>
+    /// Collects variable names from a syntax node
+    /// </summary>
+    private void CollectVariableNames(ExpressionSyntax expression, HashSet<string> variables)
+    {
+        // Handle identifier names (simple variables)
+        if (expression is IdentifierNameSyntax identifier)
+        {
+            variables.Add(identifier.Identifier.Text);
+            return;
+        }
+
+        // Recursively process all contained expressions
+        foreach (var childNode in expression.DescendantNodesAndSelf().OfType<ExpressionSyntax>())
+        {
+            if (childNode is IdentifierNameSyntax childIdentifier)
+            {
+                variables.Add(childIdentifier.Identifier.Text);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Generates code for a simple string result
+    /// </summary>
+    private string GenerateSimpleStringCode(string text)
+    {
+        return $@"
+using System;
+
+namespace DynamicInterpolation
+{{
+    public static class Evaluator
+    {{
+        public delegate object ResolverDelegate(string name);
+
+        public static string Evaluate(ResolverDelegate resolver)
+        {{
+            return ""{EscapeString(text)}"";
+        }}
+    }}
+}}";
     }
 
     /// <summary>
