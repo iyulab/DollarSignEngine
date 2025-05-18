@@ -1,4 +1,5 @@
-﻿using FluentAssertions;
+﻿using DollarSignEngine.Internals;
+using FluentAssertions;
 using Xunit.Abstractions;
 
 namespace DollarSignEngine.Tests;

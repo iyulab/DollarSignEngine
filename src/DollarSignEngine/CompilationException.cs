@@ -1,4 +1,4 @@
-﻿namespace DollarSignEngine.Internals;
+﻿namespace DollarSignEngine;
 
 /// <summary>
 /// Exception thrown when compilation fails
