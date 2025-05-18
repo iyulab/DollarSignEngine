@@ -11,6 +11,17 @@ public class InterpolationTests : TestBase
     }
 
     [Fact]
+    public async Task SumTest()
+    {
+        // Act
+        var result = await DollarSign.EvalAsync("1 + 2 = {1 + 2}");
+
+        // Assert - Compare with C# interpolation
+        var expected = $"1 + 2 = {1 + 2}";
+        result.Should().Be(expected);
+    }
+
+    [Fact]
     public async Task Should_Interpolate_Simple_Variable()
     {
         // Arrange

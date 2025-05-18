@@ -1,18 +1,16 @@
 ﻿using System.Collections;
-using System.Reflection;
 
 namespace DollarSignEngine;
 
 /// <summary>
-/// Evaluates C# string interpolation expressions at runtime
+/// Main API for evaluating C# string interpolation expressions at runtime.
 /// </summary>
 public static class DollarSign
 {
-    private static readonly DollarSignCompiler Compiler = new();
-    private static readonly LinqExpressionEvaluator LinqEvaluator = new();
+    private static readonly ExpressionEvaluator Evaluator = new();
 
     /// <summary>
-    /// Evaluates a string interpolation expression using an object's properties
+    /// Evaluates a string interpolation expression using an object's properties.
     /// </summary>
     public static async Task<string> EvalAsync(
         string expression,
@@ -22,38 +20,20 @@ public static class DollarSign
         if (string.IsNullOrEmpty(expression))
             return string.Empty;
 
-        var evalOptions = options ?? new DollarSignOptions();
+        var evalOptions = options?.Clone() ?? new DollarSignOptions();
         Logger.Debug($"[DollarSign.EvalAsync] Expression: {expression}");
 
         try
         {
-            // Check for LINQ expressions that might require special handling
-            if (ContainsLikeLyLinqExpression(expression))
+            if (variables != null)
             {
-                Logger.Debug("[DollarSign.EvalAsync] Using LINQ evaluation path");
-                // Use LINQ-specific evaluation path
-                return await LinqEvaluator.EvaluateAsync(expression, variables, evalOptions);
+                evalOptions.VariableResolver = name => ResolvePropertyValue(variables, name);
             }
 
-            Logger.Debug("[DollarSign.EvalAsync] Using standard compilation path");
-            // Use standard compilation path for non-LINQ expressions
-            // Create resolver from object or use options resolver
-            var resolver = evalOptions.VariableResolver ??
-                (name => variables == null ? null : ResolvePropertyValue(variables, name));
-
-            var compiledExpression = await Compiler.CompileExpressionAsync(expression, evalOptions);
-            return compiledExpression.Execute(resolver, evalOptions);
+            return await Evaluator.EvaluateAsync(expression, variables, evalOptions);
         }
-        catch (CompilationException ex)
+        catch (DollarSignEngineException)
         {
-            Logger.Debug($"[DollarSign.EvalAsync] CompilationException: {ex.Message}");
-            if (evalOptions.ThrowOnError)
-                throw;
-            return string.Empty;
-        }
-        catch (DollarSignEngineException ex)
-        {
-            Logger.Debug($"[DollarSign.EvalAsync] DollarSignEngineException: {ex.Message}");
             if (evalOptions.ThrowOnError)
                 throw;
             return string.Empty;
@@ -68,7 +48,7 @@ public static class DollarSign
     }
 
     /// <summary>
-    /// Evaluates a string interpolation expression using a dictionary of variables
+    /// Evaluates a string interpolation expression using a dictionary of variables.
     /// </summary>
     public static async Task<string> EvalAsync(
         string expression,
@@ -78,38 +58,20 @@ public static class DollarSign
         if (string.IsNullOrEmpty(expression))
             return string.Empty;
 
-        var evalOptions = options ?? new DollarSignOptions();
+        if (variables is null)
+            return await EvalAsync(expression, (object?)null, options);
+
+        var evalOptions = options?.Clone() ?? new DollarSignOptions();
         Logger.Debug($"[DollarSign.EvalAsync] Expression (dictionary): {expression}");
 
         try
         {
-            // Check for LINQ expressions that might require special handling
-            if (ContainsLikeLyLinqExpression(expression))
-            {
-                Logger.Debug("[DollarSign.EvalAsync] Using LINQ evaluation path (dictionary)");
-                // Use LINQ-specific evaluation path with dictionary variables
-                return await LinqEvaluator.EvaluateAsync(expression, variables, evalOptions);
-            }
-
-            Logger.Debug("[DollarSign.EvalAsync] Using standard compilation path (dictionary)");
-            // Use standard compilation path for non-LINQ expressions
-            // Create resolver from dictionary or use options resolver
-            var resolver = evalOptions.VariableResolver ??
-                (name => variables.TryGetValue(name, out var value) ? value : null);
-
-            var compiledExpression = await Compiler.CompileExpressionAsync(expression, evalOptions);
-            return compiledExpression.Execute(resolver, evalOptions);
+            evalOptions.VariableResolver = name => variables.TryGetValue(name, out var v) ? v : null;
+            var wrapper = new DictionaryWrapper(variables);
+            return await Evaluator.EvaluateAsync(expression, wrapper, evalOptions);
         }
-        catch (CompilationException ex)
+        catch (DollarSignEngineException)
         {
-            Logger.Debug($"[DollarSign.EvalAsync] CompilationException (dictionary): {ex.Message}");
-            if (evalOptions.ThrowOnError)
-                throw;
-            return string.Empty;
-        }
-        catch (DollarSignEngineException ex)
-        {
-            Logger.Debug($"[DollarSign.EvalAsync] DollarSignEngineException (dictionary): {ex.Message}");
             if (evalOptions.ThrowOnError)
                 throw;
             return string.Empty;
@@ -124,37 +86,30 @@ public static class DollarSign
     }
 
     /// <summary>
-    /// Synchronous version of EvalAsync using an object's properties
+    /// Synchronous version using object variables.
     /// </summary>
     public static string Eval(
         string expression,
         object? variables = null,
         DollarSignOptions? options = null)
-    {
-        return EvalAsync(expression, variables, options).GetAwaiter().GetResult();
-    }
+        => EvalAsync(expression, variables, options).GetAwaiter().GetResult();
 
     /// <summary>
-    /// Synchronous version of EvalAsync using a dictionary of variables
+    /// Synchronous version using dictionary variables.
     /// </summary>
     public static string Eval(
         string expression,
         IDictionary<string, object?> variables,
         DollarSignOptions? options = null)
-    {
-        return EvalAsync(expression, variables, options).GetAwaiter().GetResult();
-    }
+        => EvalAsync(expression, variables, options).GetAwaiter().GetResult();
 
     /// <summary>
-    /// Clears the expression compilation cache
+    /// Clears the expression compilation cache.
     /// </summary>
-    public static void ClearCache()
-    {
-        Compiler.ClearCache();
-    }
+    public static void ClearCache() => Evaluator.ClearCache();
 
     /// <summary>
-    /// Resolves a property value from an object
+    /// Resolves a property value from an object. Handles nested properties and dictionaries.
     /// </summary>
     private static object? ResolvePropertyValue(object source, string propertyPath)
     {
@@ -163,72 +118,49 @@ public static class DollarSign
 
         try
         {
-            // Handle nested properties (e.g., Address.City)
-            if (propertyPath.Contains('.'))
+            object? current = source;
+            string[] parts = propertyPath.Split('.');
+
+            foreach (var part in parts)
             {
-                string[] parts = propertyPath.Split('.');
-                object? current = source;
+                if (current == null)
+                    return null;
 
-                foreach (var part in parts)
+                if (current is DictionaryWrapper dw)
                 {
-                    if (current == null)
-                        return null;
-
-                    current = ResolvePropertyValue(current, part);
+                    current = dw.TryGetValue(part);
+                    continue;
                 }
 
-                return current;
+                if (current is IDictionary<string, object> genericDict && genericDict.TryGetValue(part, out var dictValue))
+                {
+                    current = dictValue;
+                    continue;
+                }
+
+                if (current is IDictionary nonGenericDict && nonGenericDict.Contains(part))
+                {
+                    current = nonGenericDict[part];
+                    continue;
+                }
+
+                var property = current.GetType().GetProperty(part,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+
+                if (property != null)
+                {
+                    current = property.GetValue(current);
+                }
+                else
+                {
+                    return null;
+                }
             }
-
-            // Handle dictionary
-            if (source is IDictionary<string, object> dict && dict.TryGetValue(propertyPath, out var dictValue))
-                return dictValue;
-
-            // Handle standard IDictionary
-            if (source is IDictionary nonGenericDict && nonGenericDict.Contains(propertyPath))
-                return nonGenericDict[propertyPath];
-
-            // Handle properties
-            var property = source.GetType().GetProperty(propertyPath,
-                BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-
-            if (property != null)
-                return property.GetValue(source);
-
-            return null;
+            return current;
         }
         catch
         {
-            // Silently fail and return null
             return null;
         }
-    }
-
-    /// <summary>
-    /// Checks if an expression is likely to contain LINQ methods requiring special handling
-    /// </summary>
-    private static bool ContainsLikeLyLinqExpression(string expression)
-    {
-        // Check for typical LINQ method calls
-        var isLinq = expression.Contains(".Where(") ||
-               expression.Contains(".Select(") ||
-               expression.Contains(".OrderBy(") ||
-               expression.Contains(".GroupBy(") ||
-               expression.Contains(".Join(") ||
-               expression.Contains(".Skip(") ||
-               expression.Contains(".Take(") ||
-               expression.Contains(".Any(") ||
-               expression.Contains(".All(") ||
-               expression.Contains(".First") ||
-               expression.Contains(".Last") ||
-               expression.Contains(".Single") ||
-               expression.Contains(".Sum(") ||
-               expression.Contains(".Average(") ||
-               expression.Contains(".Min(") ||
-               expression.Contains(".Max(") ||
-               expression.Contains(".Count(");
-
-        Logger.Debug($"[DollarSign] Expression '{expression}' contains LINQ: {isLinq}");
-        return isLinq;
     }
 }

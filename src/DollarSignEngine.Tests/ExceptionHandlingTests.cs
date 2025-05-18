@@ -1,5 +1,4 @@
-﻿using DollarSignEngine.Internals;
-using FluentAssertions;
+﻿using FluentAssertions;
 using Xunit.Abstractions;
 
 namespace DollarSignEngine.Tests;
@@ -24,20 +23,6 @@ public class ExceptionHandlingTests : TestBase
 
         // Assert
         result.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void Should_Include_Source_Code_In_CompilationException()
-    {
-        // Arrange
-        string sourceCode = "invalid C# code";
-
-        // Act
-        var exception = new CompilationException("Compilation failed", sourceCode);
-
-        // Assert
-        exception.SourceCode.Should().Be(sourceCode);
-        exception.Message.Should().Be("Compilation failed");
     }
 
     [Fact]
