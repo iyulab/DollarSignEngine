@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using System.Collections;
+using System.Reflection;
 
 namespace DollarSignEngine;
 
@@ -8,6 +9,7 @@ namespace DollarSignEngine;
 public static class DollarSign
 {
     private static readonly DollarSignCompiler Compiler = new();
+    private static readonly LinqExpressionEvaluator LinqEvaluator = new();
 
     /// <summary>
     /// Evaluates a string interpolation expression using an object's properties
@@ -21,9 +23,20 @@ public static class DollarSign
             return string.Empty;
 
         var evalOptions = options ?? new DollarSignOptions();
+        Logger.Debug($"[DollarSign.EvalAsync] Expression: {expression}");
 
         try
         {
+            // Check for LINQ expressions that might require special handling
+            if (ContainsLikeLyLinqExpression(expression))
+            {
+                Logger.Debug("[DollarSign.EvalAsync] Using LINQ evaluation path");
+                // Use LINQ-specific evaluation path
+                return await LinqEvaluator.EvaluateAsync(expression, variables, evalOptions);
+            }
+
+            Logger.Debug("[DollarSign.EvalAsync] Using standard compilation path");
+            // Use standard compilation path for non-LINQ expressions
             // Create resolver from object or use options resolver
             var resolver = evalOptions.VariableResolver ??
                 (name => variables == null ? null : ResolvePropertyValue(variables, name));
@@ -31,20 +44,23 @@ public static class DollarSign
             var compiledExpression = await Compiler.CompileExpressionAsync(expression, evalOptions);
             return compiledExpression.Execute(resolver, evalOptions);
         }
-        catch (CompilationException)
+        catch (CompilationException ex)
         {
+            Logger.Debug($"[DollarSign.EvalAsync] CompilationException: {ex.Message}");
             if (evalOptions.ThrowOnError)
                 throw;
             return string.Empty;
         }
-        catch (DollarSignEngineException)
+        catch (DollarSignEngineException ex)
         {
+            Logger.Debug($"[DollarSign.EvalAsync] DollarSignEngineException: {ex.Message}");
             if (evalOptions.ThrowOnError)
                 throw;
             return string.Empty;
         }
         catch (Exception ex)
         {
+            Logger.Debug($"[DollarSign.EvalAsync] Exception: {ex.GetType().Name}: {ex.Message}");
             if (evalOptions.ThrowOnError)
                 throw new DollarSignEngineException("Error evaluating expression", ex);
             return string.Empty;
@@ -63,9 +79,20 @@ public static class DollarSign
             return string.Empty;
 
         var evalOptions = options ?? new DollarSignOptions();
+        Logger.Debug($"[DollarSign.EvalAsync] Expression (dictionary): {expression}");
 
         try
         {
+            // Check for LINQ expressions that might require special handling
+            if (ContainsLikeLyLinqExpression(expression))
+            {
+                Logger.Debug("[DollarSign.EvalAsync] Using LINQ evaluation path (dictionary)");
+                // Use LINQ-specific evaluation path with dictionary variables
+                return await LinqEvaluator.EvaluateAsync(expression, variables, evalOptions);
+            }
+
+            Logger.Debug("[DollarSign.EvalAsync] Using standard compilation path (dictionary)");
+            // Use standard compilation path for non-LINQ expressions
             // Create resolver from dictionary or use options resolver
             var resolver = evalOptions.VariableResolver ??
                 (name => variables.TryGetValue(name, out var value) ? value : null);
@@ -73,20 +100,23 @@ public static class DollarSign
             var compiledExpression = await Compiler.CompileExpressionAsync(expression, evalOptions);
             return compiledExpression.Execute(resolver, evalOptions);
         }
-        catch (CompilationException)
+        catch (CompilationException ex)
         {
+            Logger.Debug($"[DollarSign.EvalAsync] CompilationException (dictionary): {ex.Message}");
             if (evalOptions.ThrowOnError)
                 throw;
             return string.Empty;
         }
-        catch (DollarSignEngineException)
+        catch (DollarSignEngineException ex)
         {
+            Logger.Debug($"[DollarSign.EvalAsync] DollarSignEngineException (dictionary): {ex.Message}");
             if (evalOptions.ThrowOnError)
                 throw;
             return string.Empty;
         }
         catch (Exception ex)
         {
+            Logger.Debug($"[DollarSign.EvalAsync] Exception (dictionary): {ex.GetType().Name}: {ex.Message}");
             if (evalOptions.ThrowOnError)
                 throw new DollarSignEngineException("Error evaluating expression", ex);
             return string.Empty;
@@ -155,7 +185,7 @@ public static class DollarSign
                 return dictValue;
 
             // Handle standard IDictionary
-            if (source is System.Collections.IDictionary nonGenericDict && nonGenericDict.Contains(propertyPath))
+            if (source is IDictionary nonGenericDict && nonGenericDict.Contains(propertyPath))
                 return nonGenericDict[propertyPath];
 
             // Handle properties
@@ -172,5 +202,33 @@ public static class DollarSign
             // Silently fail and return null
             return null;
         }
+    }
+
+    /// <summary>
+    /// Checks if an expression is likely to contain LINQ methods requiring special handling
+    /// </summary>
+    private static bool ContainsLikeLyLinqExpression(string expression)
+    {
+        // Check for typical LINQ method calls
+        var isLinq = expression.Contains(".Where(") ||
+               expression.Contains(".Select(") ||
+               expression.Contains(".OrderBy(") ||
+               expression.Contains(".GroupBy(") ||
+               expression.Contains(".Join(") ||
+               expression.Contains(".Skip(") ||
+               expression.Contains(".Take(") ||
+               expression.Contains(".Any(") ||
+               expression.Contains(".All(") ||
+               expression.Contains(".First") ||
+               expression.Contains(".Last") ||
+               expression.Contains(".Single") ||
+               expression.Contains(".Sum(") ||
+               expression.Contains(".Average(") ||
+               expression.Contains(".Min(") ||
+               expression.Contains(".Max(") ||
+               expression.Contains(".Count(");
+
+        Logger.Debug($"[DollarSign] Expression '{expression}' contains LINQ: {isLinq}");
+        return isLinq;
     }
 }

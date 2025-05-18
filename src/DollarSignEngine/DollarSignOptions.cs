@@ -6,6 +6,11 @@
 public delegate object? ResolveVariableDelegate(string variableName);
 
 /// <summary>
+/// Delegate for handling errors in expression evaluation
+/// </summary>
+public delegate string? ErrorHandlerDelegate(string expression, Exception exception);
+
+/// <summary>
 /// Options for the DollarSign engine
 /// </summary>
 public class DollarSignOptions
@@ -26,6 +31,11 @@ public class DollarSignOptions
     public ResolveVariableDelegate? VariableResolver { get; set; }
 
     /// <summary>
+    /// Custom error handler function
+    /// </summary>
+    public ErrorHandlerDelegate? ErrorHandler { get; set; }
+
+    /// <summary>
     /// Gets default options
     /// </summary>
     public static DollarSignOptions Default => new();
@@ -35,4 +45,16 @@ public class DollarSignOptions
     /// </summary>
     public static DollarSignOptions WithResolver(ResolveVariableDelegate resolver) =>
         new() { VariableResolver = resolver };
+
+    /// <summary>
+    /// Creates options with a specific error handler
+    /// </summary>
+    public static DollarSignOptions WithErrorHandler(ErrorHandlerDelegate errorHandler) =>
+        new() { ErrorHandler = errorHandler };
+
+    /// <summary>
+    /// Creates options that throw exceptions on errors
+    /// </summary>
+    public static DollarSignOptions Throwing() =>
+        new() { ThrowOnError = true };
 }
