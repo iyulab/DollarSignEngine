@@ -68,7 +68,7 @@ public static class DollarSign
         {
             // Create resolver from dictionary or use options resolver
             var resolver = evalOptions.VariableResolver ??
-                (name => variables == null ? null : variables.TryGetValue(name, out var value) ? value : null);
+                (name => variables.TryGetValue(name, out var value) ? value : null);
 
             var compiledExpression = await Compiler.CompileExpressionAsync(expression, evalOptions);
             return compiledExpression.Execute(resolver, evalOptions);

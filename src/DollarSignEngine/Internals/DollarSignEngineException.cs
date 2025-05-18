@@ -1,4 +1,4 @@
-﻿namespace DollarSignEngine;
+﻿namespace DollarSignEngine.Internals;
 
 /// <summary>
 /// Base exception class for DollarSignEngine
