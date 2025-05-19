@@ -1,4 +1,4 @@
-﻿namespace DollarSignEngine;
+﻿namespace DollarSignEngine; // Or your target namespace for DollarSignEngineFeatures
 
 /// <summary>
 /// Base exception class for DollarSignEngine.

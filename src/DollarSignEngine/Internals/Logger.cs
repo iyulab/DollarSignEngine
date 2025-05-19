@@ -1,6 +1,6 @@
 ﻿using System.Diagnostics;
 
-namespace DollarSignEngine.Internals;
+namespace DollarSignEngine.Internals; // Adjust namespace if needed
 
 /// <summary>
 /// Internal logger for the DollarSignEngine.

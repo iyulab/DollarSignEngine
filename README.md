@@ -15,19 +15,15 @@ The DollarSignEngine is a robust C# library designed to simplify the process of 
    - Avoid extending functionality beyond standard C# interpolation syntax
    - Only add features essential for runtime evaluation
 
-3. **Contributor Guidelines**: This library's sole purpose is runtime evaluation of C# interpolation strings. Additional features should only be considered if they directly support this core purpose.
-
 ## Features
 
 - **Dynamic Expression Evaluation:** Evaluate C# expressions dynamically at runtime, with support for interpolation and complex logic.
 - **Flexible Parameter Injection:** Easily pass parameters into expressions using dictionaries, anonymous objects, or regular C# objects.
-- **Support for Complex Types:** Effortlessly handle complex data types, including custom objects, collections, and more.
-- **Method Invocation:** Call methods on parameter objects within expressions, such as `{obj.Method()}` or `${obj.Method()}`, consistent with C# interpolation syntax.
 - **Format Specifiers & Alignment:** Full support for C# format specifiers and alignment in interpolated expressions.
 - **Custom Variable Resolution:** Provide custom variable resolvers for advanced use cases.
 - **Multiple Syntax Options:** Support for both standard C# interpolation `{expression}` and dollar-sign `${expression}` syntax.
 - **Comprehensive Error Handling:** Provides detailed exceptions for compilation and runtime errors to ease debugging.
-- **Powerful Expression Evaluation:** Uses the Roslyn compiler internally for full language compliance, supporting the complete range of C# expressions including LINQ, ternary operators, and more.
+- **Expression Caching:** Compiled expressions are cached for improved performance with repeated evaluations.
 
 ## Installation
 
@@ -93,7 +89,7 @@ public class Greeter
 }
 
 var greeter = new Greeter { Name = "Bob" };
-var options = new DollarSignOption { SupportDollarSignSyntax = true };
+var options = new DollarSignOptions { SupportDollarSignSyntax = true };
 var result = await DollarSign.EvalAsync("Greeting: ${Hello()}", greeter, options);
 Console.WriteLine(result); // Outputs: Greeting: hello, Bob
 
@@ -159,7 +155,7 @@ Console.WriteLine(result); // Outputs: Theme: Dark, Font Size: 12
 ```csharp
 // When working with text that contains literal curly braces (like JSON),
 // enable dollar sign syntax to specify which parts should be interpolated
-var options = new DollarSignOption { SupportDollarSignSyntax = true };
+var options = new DollarSignOptions { SupportDollarSignSyntax = true };
 
 var user = new { name = "Alice", age = 30 };
 
@@ -173,131 +169,100 @@ Console.WriteLine(result);
 var standardResult = await DollarSign.EvalAsync("{ \"user\": { \"name\": \"{name}\", \"age\": {age} } }", user);
 Console.WriteLine(standardResult); 
 // Outputs: { "user": { "name": "Alice", "age": 30 } }
-
-// Example with method invocation
-var greeter = new Greeter { Name = "Bob" };
-var methodResult = await DollarSign.EvalAsync("Greeting: ${greeter.Hello()}", new { greeter }, options);
-Console.WriteLine(methodResult); // Outputs: Greeting: hello, Bob
-```
-
-### Arithmetic and LINQ Operations
-
-```csharp
-// Arithmetic operations
-var values = new { a = 10, b = 5 };
-var result = await DollarSign.EvalAsync("Sum: {a + b}, Product: {a * b}, Division: {a / b}", values);
-Console.WriteLine(result); // Outputs: Sum: 15, Product: 50, Division: 2
-
-// LINQ operations with collections
-var items = new { products = new[] { 
-    new { Name = "Apple", Price = 1.99 }, 
-    new { Name = "Orange", Price = 0.99 }, 
-    new { Name = "Banana", Price = 0.59 } 
-}};
-var result = await DollarSign.EvalAsync(
-    "Average price: {products.Average(p => p.Price):C2}, Most expensive: {products.OrderByDescending(p => p.Price).First().Name}",
-    items);
-Console.WriteLine(result); // Outputs: Average price: $1.19, Most expensive: Apple
-```
-
-### Custom Variable Resolution
-
-```csharp
-// Create a custom variable resolver
-var options = new DollarSignOption
-{
-    VariableResolver = (expression, parameter) =>
-    {
-        // Custom logic to resolve variables
-        if (expression == "currentUser")
-            return "Admin";
-        
-        // Return null to fall back to standard resolution
-        return null;
-    }
-};
-
-var result = await DollarSign.EvalAsync("Current user: {currentUser}", null, options);
-Console.WriteLine(result); // Outputs: Current user: Admin
 ```
 
 ## Configuration Options
 
-The `DollarSignOption` class provides several options to customize the behavior of the expression evaluation:
+The `DollarSignOptions` class provides several options to customize the behavior of the expression evaluation:
 
 ```csharp
-var options = new DollarSignOption
+var options = new DollarSignOptions
 {
-    // Whether to throw an exception when a parameter is missing
-    ThrowOnMissingParameter = false,
+    // Whether to cache compiled expressions. Defaults to true.
+    UseCache = true,
     
-    // Whether to enable debug logging
-    EnableDebugLogging = false,
+    // Whether to throw exceptions on errors during evaluation. Defaults to false.
+    ThrowOnError = false,
     
-    // Additional namespaces to import in the script
-    AdditionalNamespaces = new List<string> { "System.Text.Json" },
+    // Custom variable resolver function.
+    VariableResolver = variableName => /* Return value for variable */,
     
-    // Whether to use strict mode for parameter access
-    StrictParameterAccess = false,
+    // Custom error handler function.
+    ErrorHandler = (expression, exception) => /* Return replacement text for errors */,
     
-    // The culture to use for formatting operations
+    // The culture to use for formatting. If null, the current culture is used.
     CultureInfo = new CultureInfo("en-US"),
     
-    // Whether to support dollar sign prefixed variables (${name})
-    SupportDollarSignSyntax = true,
-    
-    // A callback for custom variable resolution
-    VariableResolver = (expression, parameter) => { /* ... */ },
-    
-    // Whether to optimize ternary operator evaluation
-    OptimizeTernaryEvaluation = true
+    // Whether to support dollar sign syntax in templates.
+    // When enabled, {expression} is treated as literal text and ${expression} is evaluated.
+    // Defaults to false.
+    SupportDollarSignSyntax = true
 };
+```
+
+You can also use the static helper methods to create options:
+
+```csharp
+// Default options
+var options = DollarSignOptions.Default;
+
+// Options with a specific variable resolver
+var resolverOptions = DollarSignOptions.WithResolver(name => /* Resolve variable */);
+
+// Options with error handling
+var errorOptions = DollarSignOptions.WithErrorHandler((expr, ex) => /* Handle error */);
+
+// Options that throw exceptions on errors
+var throwingOptions = DollarSignOptions.Throwing();
+
+// Options with dollar sign syntax support
+var dollarOptions = DollarSignOptions.WithDollarSignSyntax();
+
+// Options with a specific culture
+var cultureOptions = DollarSignOptions.WithCulture(new CultureInfo("fr-FR"));
 ```
 
 ## Error Handling
 
-The library provides the `DollarSignEngineException` for handling errors during expression evaluation:
+The library provides exceptions for handling errors during expression evaluation:
 
 ```csharp
 try
 {
-    var result = await DollarSign.EvalAsync("Value: {nonExistentVariable}", null, 
-        new DollarSignOption { ThrowOnMissingParameter = true });
+    var result = await DollarSign.EvalAsync("{nonExistentVariable + 1}", null, 
+        new DollarSignOptions { ThrowOnError = true });
 }
 catch (DollarSignEngineException ex)
 {
-    Console.WriteLine($"Error: {ex.Message}");
+    Console.WriteLine($"General error: {ex.Message}");
     // Handle the error...
+}
+catch (CompilationException ex)
+{
+    Console.WriteLine($"Compilation error: {ex.Message}");
+    Console.WriteLine($"Error details: {ex.ErrorDetails}");
+    // Handle compilation error...
 }
 ```
 
-## Implementation Details
+## Synchronous API
 
-DollarSignEngine uses the Roslyn Compiler API (Microsoft.CodeAnalysis) internally for expression evaluation. This provides robust support for the complete C# language syntax, including:
+The library also provides synchronous versions of the evaluation methods:
 
-- Arithmetic operations
-- Ternary operators
-- Method calls
-- LINQ queries
-- Property access
-- Collection indexing
-- Extension methods
-- Lambda expressions
+```csharp
+// Using object variables
+var result = DollarSign.Eval("Hello, {name}!", new { name = "World" });
 
-The library handles parsing templates, extracting expressions, compiling them using Roslyn, and applying format specifiers before assembling the final output.
-
-## Advantages of Using Roslyn
-
-- **Full Language Compliance**: Complete support for the entire C# language specification, ensuring that expressions behave exactly as they would in compiled C# code.
-- **Better Performance**: Compiled expressions offer superior performance compared to interpreted alternatives.
-- **Stronger Type Checking**: Leverages the full .NET type system for better compile-time validation.
-- **Enhanced Security**: Reduced risk of injection attacks through proper compilation.
-- **IDE-like Error Messages**: Detailed error reporting consistent with Visual Studio for easier debugging.
-- **Future Compatibility**: Automatically stays in sync with C# language evolution as the Roslyn compiler is updated.
+// Using dictionary variables
+var parameters = new Dictionary<string, object?> { { "value", 42 } };
+var result = DollarSign.Eval("The answer is {value}.", parameters);
+```
 
 ## Performance Considerations
 
-- Compiled expressions are cached to improve performance for repeated calls
-- First-time compilation might have a small overhead, but subsequent evaluations are significantly faster
+- Compiled expressions are cached to improve performance for repeated calls with `UseCache = true` (default)
+- Use the `ClearCache()` method to free memory if needed:
+  ```csharp
+  DollarSign.ClearCache();
+  ```
 - For templates that are evaluated many times with different parameters, consider reusing the same template string
-- The compiler optimizes expressions for maximum execution speed

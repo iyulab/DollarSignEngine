@@ -1,4 +1,5 @@
-﻿namespace DollarSignEngine;
+﻿namespace DollarSignEngine; // Or your target namespace
+
 /// <summary>
 /// Delegate for resolving variable values.
 /// </summary>
@@ -7,6 +8,7 @@ public delegate object? ResolveVariableDelegate(string variableName);
 /// Delegate for handling errors in expression evaluation.
 /// </summary>
 public delegate string? ErrorHandlerDelegate(string expression, Exception exception);
+
 /// <summary>
 /// Options for the DollarSign engine.
 /// </summary>
@@ -16,14 +18,17 @@ public class DollarSignOptions
     /// Whether to cache compiled expressions. Defaults to true.
     /// </summary>
     public bool UseCache { get; set; } = true;
+
     /// <summary>
     /// Whether to throw exceptions on errors during evaluation. Defaults to false.
     /// </summary>
     public bool ThrowOnError { get; set; } = false;
+
     /// <summary>
     /// Custom variable resolver function.
     /// </summary>
     public ResolveVariableDelegate? VariableResolver { get; set; }
+
     /// <summary>
     /// Custom error handler function.
     /// </summary>
@@ -35,11 +40,24 @@ public class DollarSignOptions
     public CultureInfo? CultureInfo { get; set; }
 
     /// <summary>
-    /// Whether to support dollar sign syntax in templates. 
-    /// When enabled, {expression} is treated as literal text and ${expression} is evaluated. 
+    /// Whether to support dollar sign syntax in templates.
+    /// When enabled, {expression} is treated as literal text and ${expression} is evaluated.
     /// Defaults to false.
     /// </summary>
     public bool SupportDollarSignSyntax { get; set; } = false;
+
+    /// <summary>
+    /// Whether to treat undefined simple variables in expressions (e.g. "{UndefinedVar}")
+    /// as empty strings instead of throwing an error. This applies when no custom ErrorHandler is specified
+    /// and ThrowOnError is false. Defaults to true.
+    /// </summary>
+    public bool TreatUndefinedVariablesInSimpleExpressionsAsEmpty { get; set; } = true;
+
+    /// <summary>
+    /// Internal use: Carries type information for the CastingDictionaryAccessRewriter.
+    /// </summary>
+    internal IDictionary<string, Type>? GlobalVariableTypes { get; set; }
+
 
     /// <summary>
     /// Gets default options.
@@ -66,7 +84,6 @@ public class DollarSignOptions
 
     /// <summary>
     /// Creates options with dollar sign syntax support enabled.
-    /// When enabled, {expression} is treated as literal text and ${expression} is evaluated.
     /// </summary>
     public static DollarSignOptions WithDollarSignSyntax() =>
         new() { SupportDollarSignSyntax = true };
@@ -74,8 +91,6 @@ public class DollarSignOptions
     /// <summary>
     /// Creates options with a specific culture for formatting.
     /// </summary>
-    /// <param name="culture">The culture to use for formatting expressions.</param>
-    /// <returns>A new options instance with the specified culture.</returns>
     public static DollarSignOptions WithCulture(CultureInfo culture) =>
         new() { CultureInfo = culture };
 
@@ -89,6 +104,8 @@ public class DollarSignOptions
         VariableResolver = this.VariableResolver,
         ErrorHandler = this.ErrorHandler,
         CultureInfo = this.CultureInfo,
-        SupportDollarSignSyntax = this.SupportDollarSignSyntax
+        SupportDollarSignSyntax = this.SupportDollarSignSyntax,
+        TreatUndefinedVariablesInSimpleExpressionsAsEmpty = this.TreatUndefinedVariablesInSimpleExpressionsAsEmpty,
+        GlobalVariableTypes = this.GlobalVariableTypes // Shallow copy is fine for the dictionary reference
     };
 }

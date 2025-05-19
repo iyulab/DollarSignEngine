@@ -1,5 +1,7 @@
 ﻿using Xunit.Abstractions;
 
+namespace DollarSignEngine.Tests;
+
 public class TestBase : IDisposable
 {
     protected readonly ITestOutputHelper _output;

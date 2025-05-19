@@ -1,17 +1,160 @@
-﻿using System.Collections;
+﻿namespace DollarSignEngine;
 
-namespace DollarSignEngine;
-
-/// <summary>
-/// Main API for evaluating C# string interpolation expressions at runtime.
-/// </summary>
 public static class DollarSign
 {
     private static readonly ExpressionEvaluator Evaluator = new();
 
-    /// <summary>
-    /// Evaluates a string interpolation expression using an object's properties.
-    /// </summary>
+    public class NoParametersContext { }
+
+    internal static bool IsAnonymousType(Type? type)
+    {
+        if (type == null) return false;
+        return Attribute.IsDefined(type, typeof(CompilerGeneratedAttribute), false)
+            && type.IsGenericType && type.Name.Contains("AnonymousType")
+            && (type.Name.StartsWith("<>") || type.Name.StartsWith("VB$"))
+            && (type.Attributes & TypeAttributes.NotPublic) == TypeAttributes.NotPublic;
+    }
+
+    internal static object? ConvertToEvalFriendlyObject(object? obj)
+    {
+        if (obj == null) return null;
+        Type type = obj.GetType();
+
+        if (IsAnonymousType(type))
+        {
+            var expando = new ExpandoObject();
+            var dict = (IDictionary<string, object?>)expando;
+            foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (property.CanRead)
+                {
+                    dict[property.Name] = ConvertToEvalFriendlyObject(property.GetValue(obj));
+                }
+            }
+            return expando;
+        }
+
+        if (type.IsArray)
+        {
+            var array = (Array)obj;
+            Type? elementType = type.GetElementType();
+
+            if (elementType == null) return obj;
+
+            if (elementType.IsPrimitive || elementType == typeof(string) || elementType == typeof(decimal) ||
+                elementType == typeof(DateTime) || elementType == typeof(DateTimeOffset) ||
+                (!IsAnonymousType(elementType) && !typeof(IEnumerable).IsAssignableFrom(elementType) || elementType == typeof(string)))
+            {
+                return obj;
+            }
+
+            var items = new List<object?>(array.Length);
+            foreach (var item in array)
+            {
+                items.Add(ConvertToEvalFriendlyObject(item));
+            }
+            return items.ToArray();
+        }
+
+        if (obj is IDictionary<string, object?> objDict)
+        {
+            // FIX: Use StringComparer.OrdinalIgnoreCase explicitly instead of objDict.Comparer
+            var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in objDict)
+            {
+                newDict[kvp.Key] = ConvertToEvalFriendlyObject(kvp.Value);
+            }
+            return newDict;
+        }
+
+        if (obj is IEnumerable enumerable && !(obj is string))
+        {
+            var items = new List<object?>();
+            foreach (var item in enumerable)
+            {
+                items.Add(ConvertToEvalFriendlyObject(item));
+            }
+            return items;
+        }
+
+        return obj;
+    }
+
+
+    private static IDictionary<string, Type> GetPropertyTypes(object? obj)
+    {
+        var types = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase);
+        if (obj == null || obj is NoParametersContext) return types;
+
+        if (obj is ExpandoObject expando)
+        {
+            foreach (var kvp in (IDictionary<string, object?>)expando)
+            {
+                types[kvp.Key] = kvp.Value?.GetType() ?? typeof(object);
+            }
+        }
+        else if (obj is IDictionary<string, object?> dictObj)
+        {
+            foreach (var kvp in dictObj)
+            {
+                types[kvp.Key] = kvp.Value?.GetType() ?? typeof(object);
+            }
+        }
+        else
+        {
+            foreach (var property in obj.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (property.CanRead)
+                {
+                    types[property.Name] = property.PropertyType;
+                }
+            }
+        }
+        return types;
+    }
+
+    private static IDictionary<string, object?> ToDictionary(object? obj)
+    {
+        if (obj == null || obj is NoParametersContext) return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+        if (obj is IDictionary<string, object?> alreadyDict)
+        {
+            // FIX: Use StringComparer.OrdinalIgnoreCase explicitly instead of alreadyDict.Comparer
+            var newProcessedDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in alreadyDict)
+            {
+                newProcessedDict[kvp.Key] = ConvertToEvalFriendlyObject(kvp.Value);
+            }
+            return newProcessedDict;
+        }
+
+        if (obj is ExpandoObject)
+        {
+            return (IDictionary<string, object?>)ConvertToEvalFriendlyObject(obj)!;
+        }
+
+        var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        object objectToReflect = IsAnonymousType(obj.GetType()) ? ConvertToEvalFriendlyObject(obj)! : obj;
+
+        if (objectToReflect is IDictionary<string, object?> reflectedAsDict)
+        {
+            return reflectedAsDict;
+        }
+
+        if (objectToReflect != null && !(objectToReflect is NoParametersContext))
+        {
+            foreach (var property in objectToReflect.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (property.CanRead)
+                {
+                    var propValue = property.GetValue(objectToReflect);
+                    dict[property.Name] = ConvertToEvalFriendlyObject(propValue);
+                }
+            }
+        }
+        return dict;
+    }
+
     public static async Task<string> EvalAsync(
         string expression,
         object? variables = null,
@@ -20,147 +163,89 @@ public static class DollarSign
         if (string.IsNullOrEmpty(expression))
             return string.Empty;
 
-        var evalOptions = options?.Clone() ?? new DollarSignOptions();
+        var effectiveOptions = options?.Clone() ?? DollarSignOptions.Default;
         Logger.Debug($"[DollarSign.EvalAsync] Expression: {expression}");
 
-        try
+        object? contextForEvaluator;
+        IDictionary<string, Type>? globalVariableTypes = null;
+
+        object effectiveVariables = variables ?? new NoParametersContext();
+
+        if (!(effectiveVariables is NoParametersContext))
         {
-            if (variables != null)
+            globalVariableTypes = GetPropertyTypes(effectiveVariables);
+            effectiveOptions.GlobalVariableTypes = globalVariableTypes;
+
+            if (globalVariableTypes.Any() || effectiveVariables is IDictionary<string, object> || effectiveVariables is IDictionary<string, object?> || effectiveVariables is ExpandoObject)
             {
-                evalOptions.VariableResolver = name => ResolvePropertyValue(variables, name);
+                var globalsDict = ToDictionary(effectiveVariables);
+                contextForEvaluator = new ScriptHost(globalsDict);
             }
-
-            return await Evaluator.EvaluateAsync(expression, variables, evalOptions);
+            else
+            {
+                contextForEvaluator = ConvertToEvalFriendlyObject(effectiveVariables);
+            }
         }
-        catch (DollarSignEngineException)
+        else
         {
-            if (evalOptions.ThrowOnError)
-                throw;
-            return string.Empty;
+            contextForEvaluator = new NoParametersContext();
+            effectiveOptions.GlobalVariableTypes = new Dictionary<string, Type>();
         }
-        catch (Exception ex)
+
+        if (effectiveVariables != null &&
+            !(effectiveVariables is IDictionary<string, object?>) &&
+            !(effectiveVariables is ExpandoObject) &&
+            effectiveOptions.VariableResolver == null &&
+            !(contextForEvaluator is ScriptHost))
         {
-            Logger.Debug($"[DollarSign.EvalAsync] Exception: {ex.GetType().Name}: {ex.Message}");
-            if (evalOptions.ThrowOnError)
-                throw new DollarSignEngineException("Error evaluating expression", ex);
-            return string.Empty;
+            effectiveOptions.VariableResolver = name => ResolvePropertyValueFromObject(effectiveVariables, name);
         }
-    }
-
-    /// <summary>
-    /// Evaluates a string interpolation expression using a dictionary of variables.
-    /// </summary>
-    public static async Task<string> EvalAsync(
-        string expression,
-        IDictionary<string, object?> variables,
-        DollarSignOptions? options = null)
-    {
-        if (string.IsNullOrEmpty(expression))
-            return string.Empty;
-
-        if (variables is null)
-            return await EvalAsync(expression, (object?)null, options);
-
-        var evalOptions = options?.Clone() ?? new DollarSignOptions();
-        Logger.Debug($"[DollarSign.EvalAsync] Expression (dictionary): {expression}");
 
         try
         {
-            evalOptions.VariableResolver = name => variables.TryGetValue(name, out var v) ? v : null;
-            var wrapper = new DictionaryWrapper(variables);
-            return await Evaluator.EvaluateAsync(expression, wrapper, evalOptions);
+            string result = await Evaluator.EvaluateAsync(expression, contextForEvaluator, effectiveOptions);
+            return result;
         }
         catch (DollarSignEngineException)
         {
-            if (evalOptions.ThrowOnError)
-                throw;
+            if (effectiveOptions.ThrowOnError) throw;
             return string.Empty;
         }
         catch (Exception ex)
         {
-            Logger.Debug($"[DollarSign.EvalAsync] Exception (dictionary): {ex.GetType().Name}: {ex.Message}");
-            if (evalOptions.ThrowOnError)
-                throw new DollarSignEngineException("Error evaluating expression", ex);
+            Logger.Debug($"[DollarSign.EvalAsync] General Exception: {ex.GetType().Name}: {ex.Message}");
+            if (effectiveOptions.ThrowOnError)
+                throw new DollarSignEngineException($"Error evaluating expression: \"{expression}\"", ex);
             return string.Empty;
         }
     }
 
-    /// <summary>
-    /// Synchronous version using object variables.
-    /// </summary>
     public static string Eval(
         string expression,
         object? variables = null,
         DollarSignOptions? options = null)
         => EvalAsync(expression, variables, options).GetAwaiter().GetResult();
 
-    /// <summary>
-    /// Synchronous version using dictionary variables.
-    /// </summary>
-    public static string Eval(
-        string expression,
-        IDictionary<string, object?> variables,
-        DollarSignOptions? options = null)
-        => EvalAsync(expression, variables, options).GetAwaiter().GetResult();
-
-    /// <summary>
-    /// Clears the expression compilation cache.
-    /// </summary>
     public static void ClearCache() => Evaluator.ClearCache();
 
-    /// <summary>
-    /// Resolves a property value from an object. Handles nested properties and dictionaries.
-    /// </summary>
-    private static object? ResolvePropertyValue(object source, string propertyPath)
+    private static object? ResolvePropertyValueFromObject(object source, string propertyName)
     {
-        if (source == null || string.IsNullOrEmpty(propertyPath))
-            return null;
-
+        if (source == null || string.IsNullOrEmpty(propertyName)) return null;
         try
         {
-            object? current = source;
-            string[] parts = propertyPath.Split('.');
-
-            foreach (var part in parts)
-            {
-                if (current == null)
-                    return null;
-
-                if (current is DictionaryWrapper dw)
-                {
-                    current = dw.TryGetValue(part);
-                    continue;
-                }
-
-                if (current is IDictionary<string, object> genericDict && genericDict.TryGetValue(part, out var dictValue))
-                {
-                    current = dictValue;
-                    continue;
-                }
-
-                if (current is IDictionary nonGenericDict && nonGenericDict.Contains(part))
-                {
-                    current = nonGenericDict[part];
-                    continue;
-                }
-
-                var property = current.GetType().GetProperty(part,
-                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-
-                if (property != null)
-                {
-                    current = property.GetValue(current);
-                }
-                else
-                {
-                    return null;
-                }
-            }
-            return current;
+            var property = source.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            return property?.GetValue(source);
         }
-        catch
-        {
-            return null;
-        }
+        catch { return null; }
+    }
+}
+
+public class ScriptHost
+{
+    public IDictionary<string, object?> Globals { get; }
+
+    public ScriptHost(IDictionary<string, object?> globals)
+    {
+        Globals = globals ?? new Dictionary<string, object?>();
     }
 }

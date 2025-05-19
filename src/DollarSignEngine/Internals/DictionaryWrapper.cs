@@ -1,6 +1,4 @@
-﻿using System.Dynamic;
-
-namespace DollarSignEngine.Internals;
+﻿namespace DollarSignEngine.Internals; // Adjust namespace if needed
 
 /// <summary>
 /// Wraps a dictionary to allow its keys to be accessed as dynamic properties.
