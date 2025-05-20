@@ -3,6 +3,9 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace DollarSignEngine.Internals;
 
+/// <summary>
+/// Syntax rewriter for transforming dictionary and collection access expressions for proper type casting.
+/// </summary>
 internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
 {
     private readonly IDictionary<string, Type> _globalVariableTypes;
@@ -13,7 +16,7 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
         _globalVariableTypes = globalVariableTypes ?? throw new ArgumentNullException(nameof(globalVariableTypes));
     }
 
-    private bool IsAnonymousType(Type type) => DollarSign.IsAnonymousType(type);
+    private bool IsAnonymousType(Type type) => DataPreparationHelper.IsAnonymousType(type);
 
     private string GetParsableTypeName(Type type)
     {
@@ -145,39 +148,47 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
         return typeof(IDictionary).IsAssignableFrom(type);
     }
 
+    // Get the element type from a collection
+    private Type? GetElementType(Type collectionType)
+    {
+        if (collectionType.IsArray)
+        {
+            return collectionType.GetElementType();
+        }
+
+        if (collectionType.IsGenericType)
+        {
+            var genericArgs = collectionType.GetGenericArguments();
+            if (genericArgs.Length > 0)
+            {
+                return genericArgs[0];
+            }
+        }
+
+        return null;
+    }
+
     public override SyntaxNode? VisitElementAccessExpression(ElementAccessExpressionSyntax node)
     {
-        // Check if this is accessing an array or collection that might contain anonymous types
-        if (node.Expression is IdentifierNameSyntax identifierName &&
+        var newExpression = (ExpressionSyntax)Visit(node.Expression);
+        var newArgumentList = (BracketedArgumentListSyntax)Visit(node.ArgumentList);
+
+        // This handles array or collection access: Items[0]
+        if (newExpression is IdentifierNameSyntax identifierName &&
             _globalVariableTypes.TryGetValue(identifierName.Identifier.Text, out var collectionType) &&
             (collectionType.IsArray || IsCollectionType(collectionType)))
         {
-            // Get the element type
-            Type? elementType = null;
-            if (collectionType.IsArray)
-            {
-                elementType = collectionType.GetElementType();
-            }
-            else if (collectionType.IsGenericType)
-            {
-                var genericArgs = collectionType.GetGenericArguments();
-                if (genericArgs.Length > 0)
-                {
-                    elementType = genericArgs[0];
-                }
-            }
+            Type? elementType = GetElementType(collectionType);
 
-            // For arrays or collections of objects or anonymous types, we need special handling
-            if (elementType != null && (IsAnonymousType(elementType) || elementType == typeof(object)))
+            // If the element type is anonymous, uses ExpandoObject, or is dictionary-like
+            if (elementType != null && (IsAnonymousType(elementType) ||
+                                       typeof(System.Dynamic.ExpandoObject).IsAssignableFrom(elementType) ||
+                                       IsDictionaryType(elementType) ||
+                                       elementType == typeof(object)))
             {
-                // Visit the expression and arguments normally
-                var newExpression = (ExpressionSyntax)Visit(node.Expression);
-                var newArgumentList = (BracketedArgumentListSyntax)Visit(node.ArgumentList);
-
-                // Create the element access
+                // Create a standard element access expression but cast to dynamic
                 var elementAccess = node.Update(newExpression, newArgumentList);
 
-                // Cast the result to dynamic to allow property access
                 var castExpression = SyntaxFactory.CastExpression(
                     SyntaxFactory.ParseTypeName("dynamic"),
                     elementAccess
@@ -187,24 +198,22 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
             }
         }
 
-        // Default processing for other element access expressions
-        return base.VisitElementAccessExpression(node);
+        // For other cases, just update normally
+        return node.Update(newExpression, newArgumentList);
     }
 
     public override SyntaxNode? VisitMemberAccessExpression(MemberAccessExpressionSyntax node)
     {
-        // First check if this is a nested property access on a dictionary
+        // Transform the expression part first
+        var newExpression = (ExpressionSyntax)Visit(node.Expression);
+        var newName = (SimpleNameSyntax)Visit(node.Name);
+
+        // Case 1: Direct property access on a dictionary (obj.Property)
         if (node.Expression is IdentifierNameSyntax identifierName &&
             _globalVariableTypes.TryGetValue(identifierName.Identifier.Text, out var type) &&
             IsDictionaryType(type))
         {
-            // This is a property access on a dictionary, we need to transform it to dictionary lookup
-            // e.g., Address.City => ((dynamic)Globals["Address"])["City"]
-
-            // First, get the rewritten identifier name
-            var rewrittenExpr = (ExpressionSyntax)Visit(identifierName);
-
-            // Create the element access for the property
+            // Transform to dictionary indexer: obj.Property => ((dynamic)Globals["obj"])["Property"]
             var propertyNameArg = SyntaxFactory.Argument(
                 SyntaxFactory.LiteralExpression(
                     SyntaxKind.StringLiteralExpression,
@@ -216,73 +225,65 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
                 SyntaxFactory.SingletonSeparatedList(propertyNameArg)
             );
 
-            // Create the element access
             var elementAccessExpr = SyntaxFactory.ElementAccessExpression(
-                rewrittenExpr,
+                newExpression,
                 bracketedArgList
             );
 
             return elementAccessExpr.WithTriviaFrom(node);
         }
-        // Check if this is accessing a property of an array/collection element
-        else if (node.Expression is ElementAccessExpressionSyntax elementAccess &&
-            elementAccess.Expression is IdentifierNameSyntax collectionIdentifier &&
-            _globalVariableTypes.TryGetValue(collectionIdentifier.Identifier.Text, out var collectionType) &&
-            (collectionType.IsArray || IsCollectionType(collectionType)))
+        // Case 2: Access on an element from collection/array (arrayOrCollection[index].Property)
+        else if (node.Expression is ElementAccessExpressionSyntax elementAccess)
         {
-            // Get the element type
-            Type? elementType = null;
-            if (collectionType.IsArray)
+            // Try to determine if the collection might contain anonymous types or dictionaries
+            bool requiresSpecialHandling = false;
+
+            if (elementAccess.Expression is IdentifierNameSyntax collectionIdentifier &&
+                _globalVariableTypes.TryGetValue(collectionIdentifier.Identifier.Text, out var collectionType))
             {
-                elementType = collectionType.GetElementType();
-            }
-            else if (collectionType.IsGenericType)
-            {
-                var genericArgs = collectionType.GetGenericArguments();
-                if (genericArgs.Length > 0)
+                Type? elementType = GetElementType(collectionType);
+                if (elementType != null && (IsAnonymousType(elementType) ||
+                                          IsDictionaryType(elementType) ||
+                                          elementType == typeof(object)))
                 {
-                    elementType = genericArgs[0];
+                    requiresSpecialHandling = true;
                 }
             }
 
-            // For arrays or collections of objects or anonymous types, we need special handling
-            if (elementType != null && (IsAnonymousType(elementType) || elementType == typeof(object)))
+            if (requiresSpecialHandling)
             {
-                // Special handling for accessing properties on array elements with anonymous types
-                if (node.Expression is ElementAccessExpressionSyntax elementAccessInner)
-                {
-                    // Cast the element to dynamic first
-                    var newExpression1 = (ExpressionSyntax)Visit(elementAccessInner.Expression);
-                    var newArgList = (BracketedArgumentListSyntax)Visit(elementAccessInner.ArgumentList);
-                    var rewrittenElementAccess = elementAccessInner.Update(newExpression1, newArgList);
+                // Instead of using indexer access, use direct property name
+                // This transforms: array[index].Property => ((dynamic)array[index]).Property
 
-                    // Cast the element access to dynamic
-                    var castExpression = SyntaxFactory.CastExpression(
-                        SyntaxFactory.ParseTypeName("dynamic"),
-                        rewrittenElementAccess
-                    );
-                    var parenthesizedCast = SyntaxFactory.ParenthesizedExpression(castExpression);
+                // First visit the element access
+                var updatedElementAccess = (ElementAccessExpressionSyntax)Visit(elementAccess);
 
-                    // Create the member access with the new expression
-                    var newMemberAccess = node.Update(parenthesizedCast, node.OperatorToken, (SimpleNameSyntax)Visit(node.Name));
-                    return newMemberAccess;
-                }
+                // Cast to dynamic
+                var castExpression = SyntaxFactory.CastExpression(
+                    SyntaxFactory.ParseTypeName("dynamic"),
+                    updatedElementAccess
+                );
+
+                // Wrap in parentheses
+                var parenthesizedCast = SyntaxFactory.ParenthesizedExpression(castExpression);
+
+                // Create a standard property access on the cast
+                var memberAccess = SyntaxFactory.MemberAccessExpression(
+                    SyntaxKind.SimpleMemberAccessExpression,
+                    parenthesizedCast,
+                    newName
+                );
+
+                return memberAccess.WithTriviaFrom(node);
             }
-
-            // Default member access processing
-            var newStandardExpression = (ExpressionSyntax)Visit(node.Expression);
-            var newStandardName = (SimpleNameSyntax)Visit(node.Name);
-            return node.Update(newStandardExpression, node.OperatorToken, newStandardName);
         }
+        // Case 3: Nested property access on dictionaries (Address.City.District)
         else if (IsNestedDictionaryAccess(node))
         {
-            // Handle nested dictionary property access like "Address.City" where Address is a dictionary
             return TransformNestedPropertyPath(node);
         }
 
-        // If not a special case, process normally
-        var newExpression = (ExpressionSyntax)Visit(node.Expression);
-        var newName = (SimpleNameSyntax)Visit(node.Name);
+        // Default case: update normally
         return node.Update(newExpression, node.OperatorToken, newName);
     }
 
@@ -291,7 +292,7 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
     {
         // Recursively check if this is a nested property path that starts with a dictionary
         ExpressionSyntax current = node.Expression;
-        string rootIdentifier = null;
+        string? rootIdentifier = null;
 
         // Walk up the property chain to find the root
         while (current is MemberAccessExpressionSyntax maes)
@@ -383,6 +384,7 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
             var parent = node.Parent;
             bool skipRewrite = false;
 
+            // Check various parent syntax to determine if we should skip rewriting
             if (parent is MemberAccessExpressionSyntax maes && maes.Name == node) skipRewrite = true;
             else if (parent is QualifiedNameSyntax qns && qns.Right == node) skipRewrite = true;
             else if (parent is InvocationExpressionSyntax inv && inv.Expression == node) skipRewrite = true;
@@ -397,30 +399,19 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
             else if (parent is UsingDirectiveSyntax uds && (uds.Name.ToString() == identifierName || uds.Name.ToString().EndsWith("." + identifierName))) skipRewrite = true;
             else if (parent is QualifiedNameSyntax qnsParent && qnsParent.Left.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>().Any(id => id == node)) skipRewrite = true;
 
-            // Check context for type determination
-            bool isPartOfNestedProperty = false;
-            bool isLikelyToBeUsedInLinq = IsLikelyToBeUsedInLinq(parent, node);
-            bool containsAnonymousTypeOrObject = ContainsAnonymousTypeOrObject(originalType);
-            bool isDictionary = IsDictionaryType(originalType);
-
-            if (parent is MemberAccessExpressionSyntax maesParent && maesParent.Expression == node)
-            {
-                isPartOfNestedProperty = true;
-            }
-
-            // If the identifier is the expression part of an element access, don't rewrite it
-            // We'll handle it in VisitElementAccessExpression
+            // Special handling for element access
             if (parent is ElementAccessExpressionSyntax eas && eas.Expression == node)
             {
                 if (originalType.IsArray || IsCollectionType(originalType))
                 {
-                    // For collections or arrays, let the type system handle it directly
+                    // The parent is already handling the array/collection access
                     skipRewrite = false;
                 }
             }
 
             if (!skipRewrite)
             {
+                // Create a Globals dictionary access: Identifier => ((TYPE)Globals["Identifier"])
                 var globalsIdentifier = SyntaxFactory.IdentifierName(GlobalsPropertyName);
                 var argument = SyntaxFactory.Argument(SyntaxFactory.LiteralExpression(
                     SyntaxKind.StringLiteralExpression,
@@ -434,51 +425,41 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
                     bracketedArgumentList
                 );
 
-                // Determine appropriate type cast based on context
+                // Determine what type to cast to
                 TypeSyntax typeSyntaxToCastTo;
 
-                // For dictionaries, always use dynamic to allow property access
-                if (isDictionary)
+                // Special handling for different types
+                if (IsDictionaryType(originalType))
                 {
                     typeSyntaxToCastTo = SyntaxFactory.ParseTypeName("dynamic");
                 }
-                // For arrays of anonymous types, use dynamic[]
-                else if (originalType.IsArray && originalType.GetElementType() != null &&
-                    (IsAnonymousType(originalType.GetElementType()!) || originalType.GetElementType() == typeof(object)))
-                {
-                    typeSyntaxToCastTo = SyntaxFactory.ParseTypeName("dynamic[]");
-                }
-                // For collections that might contain anonymous types, use dynamic
-                else if (IsCollectionType(originalType) && containsAnonymousTypeOrObject)
-                {
-                    typeSyntaxToCastTo = SyntaxFactory.ParseTypeName("dynamic");
-                }
-                // For collections likely to be used with LINQ, preserve the original type
-                else if (isLikelyToBeUsedInLinq && (originalType.IsArray || IsCollectionType(originalType)))
-                {
-                    typeSyntaxToCastTo = SyntaxFactory.ParseTypeName(GetParsableTypeName(originalType));
-                }
-                // For regular collections, preserve their type
                 else if (originalType.IsArray || IsCollectionType(originalType))
                 {
-                    typeSyntaxToCastTo = SyntaxFactory.ParseTypeName(GetParsableTypeName(originalType));
+                    Type? elementType = GetElementType(originalType);
+
+                    // For collections with anonymous types or dictionaries, use dynamic
+                    if (elementType != null && (IsAnonymousType(elementType) ||
+                                               IsDictionaryType(elementType) ||
+                                               elementType == typeof(object)))
+                    {
+                        typeSyntaxToCastTo = SyntaxFactory.ParseTypeName("dynamic");
+                    }
+                    else
+                    {
+                        // For regular collections, use the actual type
+                        typeSyntaxToCastTo = SyntaxFactory.ParseTypeName(GetParsableTypeName(originalType));
+                    }
                 }
-                // Anonymous types always use dynamic
                 else if (IsAnonymousType(originalType))
                 {
                     typeSyntaxToCastTo = SyntaxFactory.ParseTypeName("dynamic");
                 }
-                // For nested property access with non-collection types, use dynamic
-                else if (isPartOfNestedProperty)
-                {
-                    typeSyntaxToCastTo = SyntaxFactory.ParseTypeName("dynamic");
-                }
-                // For all other cases, use the original type
                 else
                 {
                     typeSyntaxToCastTo = SyntaxFactory.ParseTypeName(GetParsableTypeName(originalType));
                 }
 
+                // Create the cast expression
                 var castExpression = SyntaxFactory.CastExpression(
                     typeSyntaxToCastTo,
                     elementAccessExpression
@@ -506,65 +487,5 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
         }
 
         return typeof(IEnumerable).IsAssignableFrom(type);
-    }
-
-    // Helper method to check if a collection type contains anonymous types or object elements
-    private bool ContainsAnonymousTypeOrObject(Type type)
-    {
-        if (type.IsArray)
-        {
-            var elementType = type.GetElementType();
-            return elementType != null && (IsAnonymousType(elementType) || elementType == typeof(object));
-        }
-
-        if (type.IsGenericType)
-        {
-            var genericArgs = type.GetGenericArguments();
-            if (genericArgs.Length > 0)
-            {
-                return IsAnonymousType(genericArgs[0]) || genericArgs[0] == typeof(object);
-            }
-        }
-
-        return false;
-    }
-
-    // Helper method to detect if a node is likely to be used in a LINQ operation
-    private bool IsLikelyToBeUsedInLinq(SyntaxNode? parent, SyntaxNode node)
-    {
-        if (parent == null) return false;
-
-        // Check if this node is part of a member access that might be a LINQ method
-        if (parent is MemberAccessExpressionSyntax memberAccess && memberAccess.Expression == node)
-        {
-            string memberName = memberAccess.Name.ToString();
-            // Common LINQ method names
-            string[] linqMethods = { "Where", "Select", "OrderBy", "OrderByDescending", "GroupBy",
-                                    "Join", "Skip", "Take", "First", "FirstOrDefault", "Last",
-                                    "LastOrDefault", "Single", "SingleOrDefault", "Any", "All",
-                                    "Count", "Sum", "Min", "Max", "Average", "Aggregate", "ToList",
-                                    "ToArray", "ToDictionary", "ToLookup" };
-
-            return linqMethods.Contains(memberName);
-        }
-
-        // Check if parent is an invocation and this node is the expression
-        if (parent is InvocationExpressionSyntax invocation && invocation.Expression is MemberAccessExpressionSyntax invocationMember)
-        {
-            if (invocationMember.Expression == node)
-            {
-                string methodName = invocationMember.Name.ToString();
-                // Check if the method is likely a LINQ method
-                string[] linqMethods = { "Where", "Select", "OrderBy", "OrderByDescending", "GroupBy",
-                                        "Join", "Skip", "Take", "First", "FirstOrDefault", "Last",
-                                        "LastOrDefault", "Single", "SingleOrDefault", "Any", "All",
-                                        "Count", "Sum", "Min", "Max", "Average", "Aggregate", "ToList",
-                                        "ToArray", "ToDictionary", "ToLookup" };
-
-                return linqMethods.Contains(methodName);
-            }
-        }
-
-        return false;
     }
 }

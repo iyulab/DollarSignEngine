@@ -1,6 +1,4 @@
-﻿using System.Collections;
-
-namespace DollarSignEngine.Internals;
+﻿namespace DollarSignEngine.Internals;
 
 /// <summary>
 /// Utility class for resolving nested property paths from objects
@@ -89,7 +87,7 @@ internal static class NestedPropertyResolver
             }
 
             // Try to get property via reflection with case-insensitive comparison
-            current = DollarSign.ResolvePropertyValueFromObject(current, part);
+            current = DataPreparationHelper.ResolvePropertyValueFromObject(current, part);
             if (current == null) return null;
         }
 
