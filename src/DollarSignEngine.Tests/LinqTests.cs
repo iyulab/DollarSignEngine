@@ -147,9 +147,9 @@ namespace DollarSignEngine.Tests
             // Assert - manually calculate with explicit format
             decimal sum = data.Numbers.Sum();
             double avg = data.Numbers.Average();
-            string formattedSum = string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:C2}", sum);
-            string formattedAvg = string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:N1}", avg);
-            string formattedPercent = string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:P2}", avg / 10000);
+            string formattedSum = string.Format(System.Globalization.CultureInfo.CurrentCulture, "{0:C2}", sum);
+            string formattedAvg = string.Format(System.Globalization.CultureInfo.CurrentCulture, "{0:N1}", avg);
+            string formattedPercent = string.Format(System.Globalization.CultureInfo.CurrentCulture, "{0:P2}", avg / 10000);
 
             var expected = $"Currency: {formattedSum}, Number: {formattedAvg}, Percent: {formattedPercent}";
             _output.WriteLine($"Expected: {expected}");

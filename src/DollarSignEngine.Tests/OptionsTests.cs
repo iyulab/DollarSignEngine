@@ -41,9 +41,9 @@ public class OptionsTests : TestBase
         var deCulture = new CultureInfo("de-DE");
 
         // Act - Apply different cultures
-        var usOptions = DollarSignOptions.WithCulture(usCulture);
-        var frOptions = DollarSignOptions.WithCulture(frCulture);
-        var deOptions = DollarSignOptions.WithCulture(deCulture);
+        var usOptions = DollarSignOptions.Default.WithCulture(usCulture);
+        var frOptions = DollarSignOptions.Default.WithCulture(frCulture);
+        var deOptions = DollarSignOptions.Default.WithCulture(deCulture);
 
         var usResult = await DollarSign.EvalAsync("{number:C} on {date:d}", parameters, usOptions);
         var frResult = await DollarSign.EvalAsync("{number:C} on {date:d}", parameters, frOptions);
@@ -80,7 +80,7 @@ public class OptionsTests : TestBase
             var defaultResult = await DollarSign.EvalAsync("{number:C} on {date:d}", parameters);
 
             // Act - Explicitly setting the same culture
-            var explicitOptions = DollarSignOptions.WithCulture(testCulture);
+            var explicitOptions = DollarSignOptions.Default.WithCulture(testCulture);
             var explicitResult = await DollarSign.EvalAsync("{number:C} on {date:d}", parameters, explicitOptions);
 
             // Generate expected value using the test culture
@@ -109,9 +109,9 @@ public class OptionsTests : TestBase
         var jpCulture = new CultureInfo("ja-JP");
 
         // Act with different cultures
-        var usOptions = DollarSignOptions.WithCulture(usCulture);
-        var frOptions = DollarSignOptions.WithCulture(frCulture);
-        var jpOptions = DollarSignOptions.WithCulture(jpCulture);
+        var usOptions = DollarSignOptions.Default.WithCulture(usCulture);
+        var frOptions = DollarSignOptions.Default.WithCulture(frCulture);
+        var jpOptions = DollarSignOptions.Default.WithCulture(jpCulture);
 
         var usNumberResult = await DollarSign.EvalAsync("{value:N2}", parameters, usOptions);
         var frNumberResult = await DollarSign.EvalAsync("{value:N2}", parameters, frOptions);
@@ -140,10 +140,10 @@ public class OptionsTests : TestBase
         var krCulture = new CultureInfo("ko-KR");
 
         // Act with different cultures
-        var usOptions = DollarSignOptions.WithCulture(usCulture);
-        var gbOptions = DollarSignOptions.WithCulture(gbCulture);
-        var jpOptions = DollarSignOptions.WithCulture(jpCulture);
-        var krOptions = DollarSignOptions.WithCulture(krCulture);
+        var usOptions = DollarSignOptions.Default.WithCulture(usCulture);
+        var gbOptions = DollarSignOptions.Default.WithCulture(gbCulture);
+        var jpOptions = DollarSignOptions.Default.WithCulture(jpCulture);
+        var krOptions = DollarSignOptions.Default.WithCulture(krCulture);
 
         var usCurrencyResult = await DollarSign.EvalAsync("{price:C}", parameters, usOptions);
         var gbCurrencyResult = await DollarSign.EvalAsync("{price:C}", parameters, gbOptions);

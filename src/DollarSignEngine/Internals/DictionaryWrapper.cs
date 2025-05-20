@@ -14,12 +14,49 @@ public class DictionaryWrapper : DynamicObject
 
     public override bool TryGetMember(GetMemberBinder binder, out object? result)
     {
-        return _dictionary.TryGetValue(binder.Name, out result);
+        // First try exact case match
+        if (_dictionary.TryGetValue(binder.Name, out result))
+        {
+            return true;
+        }
+
+        // If not found with exact case, try case-insensitive lookup manually
+        foreach (var key in _dictionary.Keys)
+        {
+            if (string.Equals(key, binder.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                result = _dictionary[key];
+                return true;
+            }
+        }
+
+        result = null;
+        return false;
     }
 
     public override bool TrySetMember(SetMemberBinder binder, object? value)
     {
-        _dictionary[binder.Name] = value;
+        // Check if any key with the same name but different case exists
+        string? existingKey = null;
+        foreach (var key in _dictionary.Keys)
+        {
+            if (string.Equals(key, binder.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                existingKey = key;
+                break;
+            }
+        }
+
+        // Update existing key if found, otherwise add new key
+        if (existingKey != null)
+        {
+            _dictionary[existingKey] = value;
+        }
+        else
+        {
+            _dictionary[binder.Name] = value;
+        }
+
         return true;
     }
 
@@ -28,7 +65,22 @@ public class DictionaryWrapper : DynamicObject
     /// </summary>
     public object? TryGetValue(string key)
     {
-        return _dictionary.TryGetValue(key, out var v) ? v : null;
+        // First try exact case match
+        if (_dictionary.TryGetValue(key, out var value))
+        {
+            return value;
+        }
+
+        // If not found with exact case, try case-insensitive lookup manually
+        foreach (var dictKey in _dictionary.Keys)
+        {
+            if (string.Equals(dictKey, key, StringComparison.OrdinalIgnoreCase))
+            {
+                return _dictionary[dictKey];
+            }
+        }
+
+        return null;
     }
 
     public override IEnumerable<string> GetDynamicMemberNames()

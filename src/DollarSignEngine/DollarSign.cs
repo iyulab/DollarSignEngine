@@ -1,4 +1,8 @@
-﻿namespace DollarSignEngine;
+﻿using System.Collections.Generic;
+using System.Dynamic;
+using System.Reflection;
+
+namespace DollarSignEngine;
 
 public static class DollarSign
 {
@@ -41,6 +45,28 @@ public static class DollarSign
 
             if (elementType == null) return obj;
 
+            // For numeric arrays, convert to IEnumerable<T> or List<T> to ensure LINQ extension methods work
+            if (elementType == typeof(int) ||
+                elementType == typeof(long) ||
+                elementType == typeof(float) ||
+                elementType == typeof(double) ||
+                elementType == typeof(decimal))
+            {
+                // Convert array to List<T> which has better LINQ support
+                var listType = typeof(List<>).MakeGenericType(elementType);
+                var list = Activator.CreateInstance(listType);
+                var addMethod = listType.GetMethod("Add");
+
+                if (addMethod != null)
+                {
+                    foreach (var item in array)
+                    {
+                        addMethod.Invoke(list, new[] { item });
+                    }
+                    return list;
+                }
+            }
+
             if (elementType.IsPrimitive || elementType == typeof(string) || elementType == typeof(decimal) ||
                 elementType == typeof(DateTime) || elementType == typeof(DateTimeOffset) ||
                 (!IsAnonymousType(elementType) && !typeof(IEnumerable).IsAssignableFrom(elementType) || elementType == typeof(string)))
@@ -58,7 +84,7 @@ public static class DollarSign
 
         if (obj is IDictionary<string, object?> objDict)
         {
-            // FIX: Use StringComparer.OrdinalIgnoreCase explicitly instead of objDict.Comparer
+            // Use StringComparer.OrdinalIgnoreCase explicitly 
             var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
             foreach (var kvp in objDict)
             {
@@ -79,7 +105,6 @@ public static class DollarSign
 
         return obj;
     }
-
 
     private static IDictionary<string, Type> GetPropertyTypes(object? obj)
     {
@@ -119,7 +144,7 @@ public static class DollarSign
 
         if (obj is IDictionary<string, object?> alreadyDict)
         {
-            // FIX: Use StringComparer.OrdinalIgnoreCase explicitly instead of alreadyDict.Comparer
+            // Use StringComparer.OrdinalIgnoreCase explicitly
             var newProcessedDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
             foreach (var kvp in alreadyDict)
             {
@@ -155,6 +180,29 @@ public static class DollarSign
         return dict;
     }
 
+    // Merge two dictionaries with case-insensitive keys
+    // Local variables take precedence over global ones
+    private static IDictionary<string, object?> MergeDictionaries(
+        IDictionary<string, object?> globalDict,
+        IDictionary<string, object?> localDict)
+    {
+        var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+        // Add all global variables first
+        foreach (var kvp in globalDict)
+        {
+            result[kvp.Key] = kvp.Value;
+        }
+
+        // Override with local variables (these take precedence)
+        foreach (var kvp in localDict)
+        {
+            result[kvp.Key] = kvp.Value;
+        }
+
+        return result;
+    }
+
     public static async Task<string> EvalAsync(
         string expression,
         object? variables = null,
@@ -169,37 +217,35 @@ public static class DollarSign
         object? contextForEvaluator;
         IDictionary<string, Type>? globalVariableTypes = null;
 
-        object effectiveVariables = variables ?? new NoParametersContext();
+        // Handle the effective variables based on local and global data
+        var localVariables = variables ?? new NoParametersContext();
+        var globalData = effectiveOptions.GlobalData;
 
-        if (!(effectiveVariables is NoParametersContext))
+        // Convert both to dictionaries for merging
+        var localDict = ToDictionary(localVariables);
+        var globalDict = ToDictionary(globalData);
+
+        // Merge the dictionaries with local variables taking precedence
+        var mergedDict = MergeDictionaries(globalDict, localDict);
+
+        // Get combined property types
+        globalVariableTypes = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kvp in mergedDict)
         {
-            globalVariableTypes = GetPropertyTypes(effectiveVariables);
-            effectiveOptions.GlobalVariableTypes = globalVariableTypes;
-
-            if (globalVariableTypes.Any() || effectiveVariables is IDictionary<string, object> || effectiveVariables is IDictionary<string, object?> || effectiveVariables is ExpandoObject)
+            if (kvp.Value != null)
             {
-                var globalsDict = ToDictionary(effectiveVariables);
-                contextForEvaluator = new ScriptHost(globalsDict);
+                globalVariableTypes[kvp.Key] = kvp.Value.GetType();
             }
             else
             {
-                contextForEvaluator = ConvertToEvalFriendlyObject(effectiveVariables);
+                globalVariableTypes[kvp.Key] = typeof(object);
             }
         }
-        else
-        {
-            contextForEvaluator = new NoParametersContext();
-            effectiveOptions.GlobalVariableTypes = new Dictionary<string, Type>();
-        }
 
-        if (effectiveVariables != null &&
-            !(effectiveVariables is IDictionary<string, object?>) &&
-            !(effectiveVariables is ExpandoObject) &&
-            effectiveOptions.VariableResolver == null &&
-            !(contextForEvaluator is ScriptHost))
-        {
-            effectiveOptions.VariableResolver = name => ResolvePropertyValueFromObject(effectiveVariables, name);
-        }
+        effectiveOptions.GlobalVariableTypes = globalVariableTypes;
+
+        // Create a ScriptHost with the merged data
+        contextForEvaluator = new ScriptHost(mergedDict);
 
         try
         {
@@ -228,7 +274,8 @@ public static class DollarSign
 
     public static void ClearCache() => Evaluator.ClearCache();
 
-    private static object? ResolvePropertyValueFromObject(object source, string propertyName)
+    // Changed from private to internal to support extensions
+    internal static object? ResolvePropertyValueFromObject(object source, string propertyName)
     {
         if (source == null || string.IsNullOrEmpty(propertyName)) return null;
         try

@@ -1,4 +1,4 @@
-﻿namespace DollarSignEngine; // Or your target namespace
+﻿namespace DollarSignEngine;
 
 /// <summary>
 /// Delegate for resolving variable values.
@@ -37,7 +37,7 @@ public class DollarSignOptions
     /// <summary>
     /// The culture to use for formatting. If null, the current culture is used.
     /// </summary>
-    public CultureInfo? CultureInfo { get; set; }
+    public CultureInfo CultureInfo { get; set; } = CultureInfo.CurrentCulture;
 
     /// <summary>
     /// Whether to support dollar sign syntax in templates.
@@ -54,6 +54,12 @@ public class DollarSignOptions
     public bool TreatUndefinedVariablesInSimpleExpressionsAsEmpty { get; set; } = true;
 
     /// <summary>
+    /// Global data object that will be available to all templates.
+    /// Set through the WithGlobalData extension method.
+    /// </summary>
+    internal object? GlobalData { get; set; }
+
+    /// <summary>
     /// Internal use: Carries type information for the CastingDictionaryAccessRewriter.
     /// </summary>
     internal IDictionary<string, Type>? GlobalVariableTypes { get; set; }
@@ -63,36 +69,6 @@ public class DollarSignOptions
     /// Gets default options.
     /// </summary>
     public static DollarSignOptions Default => new();
-
-    /// <summary>
-    /// Creates options with a specific variable resolver.
-    /// </summary>
-    public static DollarSignOptions WithResolver(ResolveVariableDelegate resolver) =>
-        new() { VariableResolver = resolver };
-
-    /// <summary>
-    /// Creates options with a specific error handler.
-    /// </summary>
-    public static DollarSignOptions WithErrorHandler(ErrorHandlerDelegate errorHandler) =>
-        new() { ErrorHandler = errorHandler };
-
-    /// <summary>
-    /// Creates options that throw exceptions on errors.
-    /// </summary>
-    public static DollarSignOptions Throwing() =>
-        new() { ThrowOnError = true };
-
-    /// <summary>
-    /// Creates options with dollar sign syntax support enabled.
-    /// </summary>
-    public static DollarSignOptions WithDollarSignSyntax() =>
-        new() { SupportDollarSignSyntax = true };
-
-    /// <summary>
-    /// Creates options with a specific culture for formatting.
-    /// </summary>
-    public static DollarSignOptions WithCulture(CultureInfo culture) =>
-        new() { CultureInfo = culture };
 
     /// <summary>
     /// Creates a shallow clone of the options.
@@ -106,6 +82,7 @@ public class DollarSignOptions
         CultureInfo = this.CultureInfo,
         SupportDollarSignSyntax = this.SupportDollarSignSyntax,
         TreatUndefinedVariablesInSimpleExpressionsAsEmpty = this.TreatUndefinedVariablesInSimpleExpressionsAsEmpty,
-        GlobalVariableTypes = this.GlobalVariableTypes // Shallow copy is fine for the dictionary reference
+        GlobalVariableTypes = this.GlobalVariableTypes, // Shallow copy is fine for the dictionary reference
+        GlobalData = this.GlobalData // Store the global data in the clone
     };
 }

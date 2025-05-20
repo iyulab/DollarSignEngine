@@ -7,88 +7,6 @@ using System.Text.RegularExpressions;
 
 namespace DollarSignEngine.Internals;
 
-internal static class TemplateEscaper
-{
-    private static string OPEN = "@@OPEN@@";
-    private static string CLOSE = "@@CLOSE@@";
-
-    public static string EscapeBlocks(string template) // 새로운 로직으로 대체
-    {
-        if (string.IsNullOrEmpty(template))
-        {
-            return template;
-        }
-
-        // 1단계: "{{" 를 "@@OPEN@@" 으로 정방향 치환
-        System.Text.StringBuilder pass1Builder = new System.Text.StringBuilder();
-        int i = 0;
-        while (i < template.Length)
-        {
-            if (i <= template.Length - 2 && template[i] == '{' && template[i + 1] == '{')
-            {
-                pass1Builder.Append(OPEN);
-                i += 2; // "{{" 두 글자 건너뛰기
-            }
-            else
-            {
-                pass1Builder.Append(template[i]);
-                i++;
-            }
-        }
-        string intermediateResult = pass1Builder.ToString();
-
-        // 2단계: "}}" 를 "@@CLOSE@@" 으로 역방향 치환
-        // 역방향 탐색 및 치환은 StringBuilder.Insert(0, ...)를 사용하여 구현
-        System.Text.StringBuilder finalBuilder = new System.Text.StringBuilder();
-        int j = intermediateResult.Length - 1;
-        while (j >= 0)
-        {
-            // 현재 위치 j와 그 앞의 j-1 위치를 확인하여 "}}" 패턴을 찾음
-            if (j > 0 && intermediateResult[j - 1] == '}' && intermediateResult[j] == '}')
-            {
-                finalBuilder.Insert(0, CLOSE); // 결과의 맨 앞에 CLOSE 추가
-                j -= 2; // "}}" 두 글자 건너뛰기 (인덱스를 2만큼 앞으로 이동)
-            }
-            else
-            {
-                finalBuilder.Insert(0, intermediateResult[j]); // 결과의 맨 앞에 현재 문자 추가
-                j--;
-            }
-        }
-        return finalBuilder.ToString();
-    }
-
-    public static string UnescapeBlocks(string template)
-    {
-        if (string.IsNullOrEmpty(template))
-        {
-            return template;
-        }
-
-        var result = new System.Text.StringBuilder();
-        int i = 0;
-        while (i < template.Length)
-        {
-            if (i <= template.Length - OPEN.Length && template.Substring(i, OPEN.Length) == OPEN)
-            {
-                result.Append("{");
-                i += OPEN.Length; // Skip @@OPEN@@
-            }
-            else if (i <= template.Length - CLOSE.Length && template.Substring(i, CLOSE.Length) == CLOSE)
-            {
-                result.Append("}");
-                i += CLOSE.Length; // Skip @@CLOSE@@
-            }
-            else
-            {
-                result.Append(template[i]);
-                i++;
-            }
-        }
-        return result.ToString();
-    }
-}
-
 internal class ExpressionEvaluator
 {
     private readonly Dictionary<string, ScriptRunner<object>> _scriptCache = new(StringComparer.OrdinalIgnoreCase);
@@ -157,13 +75,18 @@ internal class ExpressionEvaluator
                 object? value = null;
                 try
                 {
-                    if (string.IsNullOrWhiteSpace(finalExpr)) value = string.Empty;
-                    else if (options.VariableResolver != null && SimpleIdentifierRegex.IsMatch(finalExpr) && !finalExpr.Contains('.'))
+                    if (options.VariableResolver != null)
                         value = options.VariableResolver(finalExpr);
-                    else if (SimplePropertyPathRegex.IsMatch(finalExpr) && context is not ScriptHost && context is not DictionaryWrapper && finalExpr.Contains('.'))
-                        value = ResolveNestedProperty(context, finalExpr);
-                    else
-                        value = await EvaluateScriptAsync(finalExpr, context, options);
+
+                    if (value == null)
+                    {
+                        if (string.IsNullOrWhiteSpace(finalExpr)) value = string.Empty;
+
+                        else if (SimplePropertyPathRegex.IsMatch(finalExpr) && context is not ScriptHost && context is not DictionaryWrapper && finalExpr.Contains('.'))
+                            value = ResolveNestedProperty(context, finalExpr);
+                        else
+                            value = await EvaluateScriptAsync(finalExpr, context, options);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -206,6 +129,7 @@ internal class ExpressionEvaluator
         string result = TemplateEscaper.UnescapeBlocks(sb.ToString());
         return result;
     }
+
 
     private int FindMatchingBrace(string text, int startIndex, char openBrace, char closeBrace)
     {
@@ -386,8 +310,16 @@ internal class ExpressionEvaluator
         {
             var scriptOptions = ScriptOptions.Default
                 .AddReferences(GetReferences(effectiveGlobals, options.GlobalVariableTypes?.Values.Select(t => t.Assembly).ToArray()))
-                .AddImports("System", "System.Linq", "System.Collections.Generic", "System.Math",
-                            "System.Globalization", "System.Dynamic", "DollarSignEngine");
+                .AddImports(
+                    "System",
+                    "System.Linq",           // Ensure System.Linq is always imported
+                    "System.Collections",    // Add core collections namespace
+                    "System.Collections.Generic",
+                    "System.Math",
+                    "System.Globalization",
+                    "System.Dynamic",
+                    "DollarSignEngine"
+                );
 
             Logger.Debug($"[EvaluateScriptAsync] Compiling expression: '{processedExpression}' with globalsType: '{globalsTypeForScript.FullName}'");
 
@@ -489,6 +421,7 @@ internal class ExpressionEvaluator
             }
         }
 
+        // Add core system assemblies
         AddValidAssembly(typeof(object).Assembly);
         AddValidAssembly(typeof(System.Linq.Enumerable).Assembly);
         AddValidAssembly(typeof(System.Collections.Generic.List<>).Assembly);
@@ -497,16 +430,29 @@ internal class ExpressionEvaluator
         AddValidAssembly(typeof(Microsoft.CSharp.RuntimeBinder.Binder).Assembly);
         AddValidAssembly(typeof(System.Dynamic.IDynamicMetaObjectProvider).Assembly);
 
+        // Explicitly add System.Core where LINQ is defined
+        AddValidAssembly(Assembly.Load("System.Core"));
+
+        // Add the assemblies for our own types
         AddValidAssembly(typeof(ExpressionEvaluator).Assembly);
         AddValidAssembly(typeof(DollarSign).Assembly);
 
-        if (contextObject != null) AddValidAssembly(contextObject.GetType().Assembly);
-
-        if (additionalAssembliesFromTypes != null)
+        // Add context object assemblies
+        if (contextObject != null)
         {
-            foreach (var asm in additionalAssembliesFromTypes) AddValidAssembly(asm);
+            AddValidAssembly(contextObject.GetType().Assembly);
         }
 
+        // Add additional assemblies
+        if (additionalAssembliesFromTypes != null)
+        {
+            foreach (var asm in additionalAssembliesFromTypes)
+            {
+                AddValidAssembly(asm);
+            }
+        }
+
+        // Add assemblies from generic type arguments
         if (contextObject != null)
         {
             Type contextType = contextObject.GetType();
@@ -543,9 +489,23 @@ internal class ExpressionEvaluator
                 try { value = getter(instance); return true; }
                 catch (Exception ex) { Logger.Debug($"[TypeAccessor.TryGetPropertyValue] Property: {propName}, Instance: {instance.GetType().Name}, Error: {ex.Message}"); value = null; return false; }
             }
-            value = null; return false;
+
+            // Try case-insensitive lookup if not found directly
+            foreach (var key in _getters.Keys)
+            {
+                if (string.Equals(key, propName, StringComparison.OrdinalIgnoreCase))
+                {
+                    try { value = _getters[key](instance); return true; }
+                    catch (Exception ex) { Logger.Debug($"[TypeAccessor.TryGetPropertyValue] Property: {key}, Instance: {instance.GetType().Name}, Error: {ex.Message}"); }
+                    break;
+                }
+            }
+
+            value = null;
+            return false;
         }
     }
+
     private TypeAccessor GetTypeAccessor(Type type)
     {
         lock (_typeAccessorLock)
@@ -558,11 +518,18 @@ internal class ExpressionEvaluator
             return accessor;
         }
     }
+
     private TypeAccessor CreateTypeAccessor(Type type)
     {
         var accessor = new TypeAccessor();
         var props = type.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-        foreach (var p in props) { if (p.CanRead && p.GetIndexParameters().Length == 0) { accessor.AddGetter(p.Name, inst => p.GetValue(inst)); } }
+        foreach (var p in props)
+        {
+            if (p.CanRead && p.GetIndexParameters().Length == 0)
+            {
+                accessor.AddGetter(p.Name, inst => p.GetValue(inst));
+            }
+        }
         return accessor;
     }
     #endregion
