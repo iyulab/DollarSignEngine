@@ -7,17 +7,25 @@ using System.Text.RegularExpressions;
 
 namespace DollarSignEngine.Internals;
 
+/// <summary>
+/// Core expression evaluation engine. 
+/// </summary>
 internal class ExpressionEvaluator
 {
-    private readonly Dictionary<string, ScriptRunner<object>> _scriptCache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly object _cacheLock = new();
+    // Script compilation and execution cache
+    private readonly LruCache<string, ScriptRunner<object>> _scriptCache =
+        new(1000, StringComparer.OrdinalIgnoreCase);
 
-    private readonly Dictionary<Type, TypeAccessor> _typeAccessors = new();
-    private readonly object _typeAccessorLock = new();
+    // Regex patterns for parsing expressions
+    private static readonly Regex SimpleIdentifierRegex =
+        new(@"^[a-zA-Z_][a-zA-Z0-9_]*$", RegexOptions.Compiled);
 
-    private static readonly Regex SimpleIdentifierRegex = new(@"^[a-zA-Z_][a-zA-Z0-9_]*$", RegexOptions.Compiled);
-    private static readonly Regex SimplePropertyPathRegex = new(@"^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$", RegexOptions.Compiled);
+    private static readonly Regex SimplePropertyPathRegex =
+        new(@"^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$", RegexOptions.Compiled);
 
+    /// <summary>
+    /// Evaluates a template string, replacing expressions with their computed values.
+    /// </summary>
     public async Task<string> EvaluateAsync(string template, object? context, DollarSignOptions options)
     {
         if (string.IsNullOrEmpty(template))
@@ -29,6 +37,7 @@ internal class ExpressionEvaluator
         // 2. Main processing on tokenized string
         var sb = new StringBuilder();
         int i = 0, n = work.Length;
+
         while (i < n)
         {
             char currentChar = work[i];
@@ -36,7 +45,9 @@ internal class ExpressionEvaluator
             // Handle literal '}}' -> '}'
             if (currentChar == '}' && i + 1 < n && work[i + 1] == '}')
             {
-                sb.Append('}'); i += 2; continue;
+                sb.Append('}');
+                i += 2;
+                continue;
             }
 
             bool isDollarExpr = options.SupportDollarSignSyntax && currentChar == '$' && i + 1 < n && work[i + 1] == '{';
@@ -47,23 +58,28 @@ internal class ExpressionEvaluator
                 int offset = isDollarExpr ? 2 : 1;
                 int exprStart = i + offset;
                 int exprEnd = FindMatchingBrace(work, exprStart, '{', '}');
+
                 if (exprEnd < 0)
                 {
-                    sb.Append(work.Substring(i, offset)); i += offset; continue;
+                    sb.Append(work.Substring(i, offset));
+                    i += offset;
+                    continue;
                 }
 
-                // Extract expression content
+                // Extract and parse expression content
                 string content = work.Substring(exprStart, exprEnd - exprStart);
                 string expr = content;
                 string? format = null;
                 string? align = null;
 
+                // Extract formatting and alignment info
                 int fmtPos = FindFirstUnnestedChar(expr, ':');
                 if (fmtPos >= 0)
                 {
                     format = expr[(fmtPos + 1)..].Trim();
                     expr = expr[..fmtPos].Trim();
                 }
+
                 int alignPos = FindFirstUnnestedChar(expr, ',');
                 if (alignPos >= 0 && (fmtPos < 0 || alignPos < fmtPos))
                 {
@@ -73,27 +89,42 @@ internal class ExpressionEvaluator
 
                 string finalExpr = expr.Trim();
                 object? value = null;
+
                 try
                 {
+                    // Try to resolve using custom resolver first
                     if (options.VariableResolver != null)
                         value = options.VariableResolver(finalExpr);
 
                     if (value == null)
                     {
-                        if (string.IsNullOrWhiteSpace(finalExpr)) value = string.Empty;
-
-                        else if (SimplePropertyPathRegex.IsMatch(finalExpr) && context is not ScriptHost && context is not DictionaryWrapper && finalExpr.Contains('.'))
-                            value = ResolveNestedProperty(context, finalExpr);
+                        if (string.IsNullOrWhiteSpace(finalExpr))
+                        {
+                            value = string.Empty;
+                        }
+                        // For dot-notation properties, use faster property resolver
+                        else if (SimplePropertyPathRegex.IsMatch(finalExpr) &&
+                                context is not ScriptHost &&
+                                context is not DictionaryWrapper &&
+                                finalExpr.Contains('.'))
+                        {
+                            value = PropertyResolver.ResolveNestedProperty(context, finalExpr);
+                        }
                         else
+                        {
+                            // Full script evaluation for complex expressions
                             value = await EvaluateScriptAsync(finalExpr, context, options);
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
                     bool handled = false;
+
                     if (options.ErrorHandler != null)
                     {
-                        sb.Append(options.ErrorHandler(finalExpr, ex)); handled = true;
+                        sb.Append(options.ErrorHandler(finalExpr, ex));
+                        handled = true;
                     }
                     else if (options.ThrowOnError)
                     {
@@ -101,9 +132,13 @@ internal class ExpressionEvaluator
                         if (ex is DollarSignEngineException) throw;
                         throw new DollarSignEngineException($"Error evaluating expression: '{finalExpr}'", ex);
                     }
-                    else if (options.TreatUndefinedVariablesInSimpleExpressionsAsEmpty && SimpleIdentifierRegex.IsMatch(finalExpr) && !finalExpr.Contains('.') &&
-                             (ex is KeyNotFoundException || ex.InnerException is KeyNotFoundException || ex is RuntimeBinderException ||
-                              (ex is DollarSignEngineException de && de.InnerException is RuntimeBinderException)))
+                    else if (options.TreatUndefinedVariablesInSimpleExpressionsAsEmpty &&
+                              SimpleIdentifierRegex.IsMatch(finalExpr) &&
+                              !finalExpr.Contains('.') &&
+                              (ex is KeyNotFoundException ||
+                               ex.InnerException is KeyNotFoundException ||
+                               ex is RuntimeBinderException ||
+                               (ex is DollarSignEngineException de && de.InnerException is RuntimeBinderException)))
                     {
                         handled = true;
                     }
@@ -117,7 +152,9 @@ internal class ExpressionEvaluator
             // Literal '{' when dollar syntax is enabled
             if (options.SupportDollarSignSyntax && currentChar == '{')
             {
-                sb.Append('{'); i++; continue;
+                sb.Append('{');
+                i++;
+                continue;
             }
 
             // Default literal char
@@ -130,13 +167,15 @@ internal class ExpressionEvaluator
         return result;
     }
 
-
+    /// <summary>
+    /// Finds a matching closing brace for a given opening brace position.
+    /// </summary>
     private int FindMatchingBrace(string text, int startIndex, char openBrace, char closeBrace)
     {
         int depth = 1;
         for (int k = startIndex; k < text.Length; k++)
         {
-            // Basic string literal skipping (does not handle escaped quotes within strings perfectly)
+            // Skip string literals
             if (text[k] == '"' || text[k] == '\'')
             {
                 char quote = text[k];
@@ -156,9 +195,12 @@ internal class ExpressionEvaluator
                 if (depth == 0) return k;
             }
         }
-        return -1;
+        return -1; // No matching brace found
     }
 
+    /// <summary>
+    /// Finds the first occurrence of a character that is not nested within parentheses or quotes.
+    /// </summary>
     private static int FindFirstUnnestedChar(string s, char ch)
     {
         int parenDepth = 0;
@@ -191,14 +233,17 @@ internal class ExpressionEvaluator
                     return k;
             }
         }
-        return -1;
+        return -1; // Not found
     }
 
+    /// <summary>
+    /// Applies formatting and alignment to a value.
+    /// </summary>
     private string ApplyFormat(object? value, string? alignment, string? format, string originalExpression, DollarSignOptions options)
     {
         bool isComplexExpression = originalExpression.Any(c => !char.IsLetterOrDigit(c) && c != '_' && c != '.');
         CultureInfo culture = options.CultureInfo ??
-                              (isComplexExpression ? CultureInfo.InvariantCulture : CultureInfo.CurrentCulture);
+                             (isComplexExpression ? CultureInfo.InvariantCulture : CultureInfo.CurrentCulture);
 
         string? stringValue = null;
 
@@ -208,11 +253,9 @@ internal class ExpressionEvaluator
         }
         else if (value is string sVal)
         {
-            // This Regex.Replace is for unescaping {{...}} if they appear in the *result* of an expression.
-            // This is distinct from the template's {{...}} syntax handled by the main EvaluateAsync loop's recursive call.
+            // Unescape {{...}} if they appear in the result of an expression
             if (string.IsNullOrEmpty(format))
             {
-                // Example: If script returns "Result: {{Value}}", this makes it "Result: {Value}"
                 stringValue = Regex.Replace(sVal, @"\{\{(.*?)\}\}", m => $"{{{m.Groups[1].Value}}}");
             }
             else
@@ -222,17 +265,18 @@ internal class ExpressionEvaluator
         }
 
         if (value == null && !string.IsNullOrEmpty(alignment) && stringValue == null)
-        { // stringValue would be string.Empty if value was null
+        {
+            // Apply alignment to empty string
             return string.Format(culture, $"{{0,{alignment}}}", string.Empty);
         }
-        // If value was null, stringValue is now string.Empty.
-        // If value was string, stringValue is now the (potentially unescaped) string.
-        if (stringValue == string.Empty && string.IsNullOrEmpty(alignment)) return string.Empty;
 
-
-        if (stringValue != null && string.IsNullOrEmpty(alignment) && string.IsNullOrEmpty(format))
+        // Use existing string value
+        if (stringValue != null)
         {
-            return stringValue;
+            if (string.IsNullOrEmpty(alignment) && string.IsNullOrEmpty(format))
+            {
+                return stringValue;
+            }
         }
 
         object valueToFormat = stringValue ?? value!;
@@ -244,6 +288,7 @@ internal class ExpressionEvaluator
 
         try
         {
+            // Use IFormattable if available for best formatting support
             if (valueToFormat is IFormattable formattableValue)
             {
                 string formatted = formattableValue.ToString(format, culture);
@@ -253,16 +298,21 @@ internal class ExpressionEvaluator
                 }
                 return formatted;
             }
+
+            // Fall back to standard string.Format
             return string.Format(culture, pattern, valueToFormat);
         }
         catch (FormatException ex)
         {
-            Logger.Debug($"[ExpressionEvaluator.ApplyFormat] FormatException for value '{valueToFormat}', format '{format}'. Error: {ex.Message}");
+            Logger.Warning($"Format error for value '{valueToFormat}', format '{format}': {ex.Message}");
             if (options.ThrowOnError) throw;
             return valueToFormat?.ToString() ?? string.Empty;
         }
     }
 
+    /// <summary>
+    /// Evaluates a C# script expression against a context object.
+    /// </summary>
     private async Task<object?> EvaluateScriptAsync(string expression, object? context, DollarSignOptions options)
     {
         ScriptRunner<object>? runner;
@@ -270,9 +320,9 @@ internal class ExpressionEvaluator
         Type globalsTypeForScript;
         object effectiveGlobals = context ?? new DollarSign.NoParametersContext();
 
-        // This logging is crucial
-        Logger.Debug($"[EvaluateScriptAsync START] Original Expr: \"{expression}\", Processed Expr: \"{processedExpression}\", Context: {context?.GetType().Name}");
+        Logger.Debug($"[EvaluateScriptAsync START] Original Expr: \"{expression}\", Context: {context?.GetType().Name}");
 
+        // Process scripts with global variable types for better type safety
         if (options.GlobalVariableTypes != null && options.GlobalVariableTypes.Any() && context is ScriptHost scriptHostContext)
         {
             var syntaxTree = CSharpSyntaxTree.ParseText(expression, new CSharpParseOptions(LanguageVersion.Latest, kind: SourceCodeKind.Script));
@@ -281,7 +331,7 @@ internal class ExpressionEvaluator
             processedExpression = newRoot.ToFullString();
             globalsTypeForScript = typeof(ScriptHost);
             effectiveGlobals = scriptHostContext;
-            Logger.Debug($"[EvaluateScriptAsync] Rewritten expression for ScriptHost: '{processedExpression}'");
+            Logger.Debug($"[EvaluateScriptAsync] Rewritten expression: '{processedExpression}'");
         }
         else if (context is DictionaryWrapper dw)
         {
@@ -295,25 +345,37 @@ internal class ExpressionEvaluator
             Logger.Debug($"[EvaluateScriptAsync] Using POCO/NoParams ({globalsTypeForScript.Name}). Expression: '{processedExpression}'");
         }
 
-        string cacheKey = options.UseCache ? $"{globalsTypeForScript.FullName}_{processedExpression}" : Guid.NewGuid().ToString();
+        // Generate cache key
+        string cacheKey = options.UseCache
+            ? $"{globalsTypeForScript.FullName}_{processedExpression}"
+            : Guid.NewGuid().ToString();
 
+        // Check cache first if enabled
         if (options.UseCache)
         {
-            lock (_cacheLock) { _scriptCache.TryGetValue(cacheKey, out runner); }
+            if (_scriptCache.TryGetValue(cacheKey, out runner))
+            {
+                Logger.Debug($"[EvaluateScriptAsync] Cache hit for expression: '{processedExpression}'");
+            }
+            else
+            {
+                runner = null;
+            }
         }
         else
         {
             runner = null;
         }
 
+        // Compile script if not in cache
         if (runner == null)
         {
             var scriptOptions = ScriptOptions.Default
-                .AddReferences(GetReferences(effectiveGlobals, options.GlobalVariableTypes?.Values.Select(t => t.Assembly).ToArray()))
+                .AddReferences(AssemblyReferenceHelper.GetReferences(effectiveGlobals, options.GlobalVariableTypes?.Values.Select(t => t.Assembly).ToArray()))
                 .AddImports(
                     "System",
-                    "System.Linq",           // Ensure System.Linq is always imported
-                    "System.Collections",    // Add core collections namespace
+                    "System.Linq",
+                    "System.Collections",
                     "System.Collections.Generic",
                     "System.Math",
                     "System.Globalization",
@@ -323,214 +385,58 @@ internal class ExpressionEvaluator
 
             Logger.Debug($"[EvaluateScriptAsync] Compiling expression: '{processedExpression}' with globalsType: '{globalsTypeForScript.FullName}'");
 
-            var script = CSharpScript.Create<object>(processedExpression, scriptOptions, globalsType: globalsTypeForScript);
-
             try
             {
+                var script = CSharpScript.Create<object>(processedExpression, scriptOptions, globalsType: globalsTypeForScript);
                 runner = script.CreateDelegate();
+
+                // Cache the compiled script if caching is enabled
+                if (options.UseCache && runner != null)
+                {
+                    _scriptCache.GetOrAdd(cacheKey, _ => runner);
+                }
             }
             catch (CompilationErrorException ex)
             {
                 string errorDetails = string.Join(Environment.NewLine, ex.Diagnostics.Select(d => d.ToString()));
-                Logger.Debug($"[EvaluateScriptAsync] CompilationErrorException: {errorDetails} for expression: {processedExpression}");
+                Logger.Error($"Compilation error: {errorDetails} for expression: {processedExpression}");
                 throw new CompilationException($"Error compiling C# script: {processedExpression} (Original: {expression}) | Errors: {errorDetails}", errorDetails, ex);
             }
             catch (Exception ex)
             {
-                Logger.Debug($"[EvaluateScriptAsync] Exception during script delegate creation: {ex.Message} for expression: {processedExpression}");
+                Logger.Error($"Unexpected error during script compilation: {ex.Message} for expression: {processedExpression}");
                 throw new DollarSignEngineException($"Unexpected error creating script delegate for: {processedExpression} (Original: {expression})", ex);
-            }
-
-            if (options.UseCache && runner != null)
-            {
-                lock (_cacheLock) { _scriptCache[cacheKey] = runner; }
             }
         }
 
         if (runner == null)
         {
-            Logger.Debug($"[EvaluateScriptAsync] Runner is null after compilation/cache attempt for key: {cacheKey}");
+            Logger.Error($"Script runner is null after compilation/cache attempt for key: {cacheKey}");
             throw new DollarSignEngineException($"Failed to create or retrieve a script runner for expression: {processedExpression}");
         }
 
         try
         {
+            // Execute the script
             var result = await runner(effectiveGlobals, CancellationToken.None);
-            Logger.Debug($"[EvaluateScriptAsync END] Original Expr: \"{expression}\", Processed Expr: \"{processedExpression}\", Result: \"{result}\"");
+            Logger.Debug($"[EvaluateScriptAsync END] Result: \"{result}\"");
             return result;
         }
         catch (Exception ex)
         {
-            Logger.Debug($"[EvaluateScriptAsync] Runtime error executing script '{processedExpression}': {ex.Message}{Environment.NewLine}StackTrace: {ex.StackTrace}");
+            Logger.Error($"Runtime error executing script '{processedExpression}': {ex.Message}");
             throw new DollarSignEngineException($"Runtime error executing script: '{processedExpression}' (Original: {expression})", ex);
         }
     }
 
-    private object? ResolveNestedProperty(object? source, string path)
-    {
-        if (source == null || string.IsNullOrEmpty(path)) return null;
-        object? current = source;
-        string[] parts = path.Split('.');
-
-        foreach (var part in parts)
-        {
-            if (current == null) return null;
-
-            if (current is DictionaryWrapper dw) { current = dw.TryGetValue(part); continue; }
-            if (current is IDictionary<string, object> genericDict)
-            {
-                if (genericDict.TryGetValue(part, out var dictValue) ||
-                    (genericDict.Keys.FirstOrDefault(k => string.Equals(k, part, StringComparison.OrdinalIgnoreCase)) is string key && genericDict.TryGetValue(key, out dictValue)))
-                { current = dictValue; }
-                else { return null; }
-                continue;
-            }
-            if (current is IDictionary<string, object?> genericDictNullable)
-            {
-                if (genericDictNullable.TryGetValue(part, out var dictValue) ||
-                    (genericDictNullable.Keys.FirstOrDefault(k => string.Equals(k, part, StringComparison.OrdinalIgnoreCase)) is string key && genericDictNullable.TryGetValue(key, out dictValue)))
-                { current = dictValue; }
-                else { return null; }
-                continue;
-            }
-            if (current is IDictionary nonGenericDict)
-            {
-                object? tempKey = part;
-                if (!nonGenericDict.Contains(tempKey))
-                {
-                    tempKey = nonGenericDict.Keys.Cast<object>().FirstOrDefault(k => k is string ks && string.Equals(ks, part, StringComparison.OrdinalIgnoreCase));
-                }
-                if (tempKey != null && nonGenericDict.Contains(tempKey)) { current = nonGenericDict[tempKey]; } else { return null; }
-                continue;
-            }
-
-            var accessor = GetTypeAccessor(current.GetType());
-            if (!accessor.TryGetPropertyValue(current, part, out current)) return null;
-        }
-        return current;
-    }
-
-    private IEnumerable<MetadataReference> GetReferences(object? contextObject, IEnumerable<Assembly>? additionalAssembliesFromTypes = null)
-    {
-        var assemblies = new HashSet<Assembly>();
-        void AddValidAssembly(Assembly? asm)
-        {
-            if (asm != null && !asm.IsDynamic && !string.IsNullOrEmpty(asm.Location) && File.Exists(asm.Location))
-            {
-                assemblies.Add(asm);
-            }
-        }
-
-        // Add core system assemblies
-        AddValidAssembly(typeof(object).Assembly);
-        AddValidAssembly(typeof(System.Linq.Enumerable).Assembly);
-        AddValidAssembly(typeof(System.Collections.Generic.List<>).Assembly);
-        AddValidAssembly(typeof(System.Text.RegularExpressions.Regex).Assembly);
-        AddValidAssembly(typeof(Uri).Assembly);
-        AddValidAssembly(typeof(Microsoft.CSharp.RuntimeBinder.Binder).Assembly);
-        AddValidAssembly(typeof(System.Dynamic.IDynamicMetaObjectProvider).Assembly);
-
-        // Explicitly add System.Core where LINQ is defined
-        AddValidAssembly(Assembly.Load("System.Core"));
-
-        // Add the assemblies for our own types
-        AddValidAssembly(typeof(ExpressionEvaluator).Assembly);
-        AddValidAssembly(typeof(DollarSign).Assembly);
-
-        // Add context object assemblies
-        if (contextObject != null)
-        {
-            AddValidAssembly(contextObject.GetType().Assembly);
-        }
-
-        // Add additional assemblies
-        if (additionalAssembliesFromTypes != null)
-        {
-            foreach (var asm in additionalAssembliesFromTypes)
-            {
-                AddValidAssembly(asm);
-            }
-        }
-
-        // Add assemblies from generic type arguments
-        if (contextObject != null)
-        {
-            Type contextType = contextObject.GetType();
-            if (contextType.IsGenericType)
-            {
-                foreach (Type argType in contextType.GetGenericArguments())
-                {
-                    AddValidAssembly(argType.Assembly);
-                }
-            }
-        }
-
-        return assemblies
-            .Select(a => MetadataReference.CreateFromFile(a.Location))
-            .Distinct() // Using Distinct after Select to avoid issues with MetadataReference equality
-            .ToList();
-    }
-
+    /// <summary>
+    /// Clears all internal caches.
+    /// </summary>
     public void ClearCache()
     {
-        lock (_cacheLock) { _scriptCache.Clear(); Logger.Debug("[ExpressionEvaluator.ClearCache] Script cache cleared."); }
-        lock (_typeAccessorLock) { _typeAccessors.Clear(); Logger.Debug("[ExpressionEvaluator.ClearCache] Type accessor cache cleared."); }
+        _scriptCache.Clear();
+        TypeAccessorFactory.ClearCache();
+        TypeNameHelper.ClearCaches();
+        Logger.Info("[ExpressionEvaluator.ClearCache] All caches cleared.");
     }
-
-    #region TypeAccessor Inner Class
-    private class TypeAccessor
-    {
-        private readonly Dictionary<string, Func<object, object?>> _getters = new(StringComparer.OrdinalIgnoreCase);
-        public void AddGetter(string name, Func<object, object?> getter) => _getters[name] = getter;
-        public bool TryGetPropertyValue(object instance, string propName, out object? value)
-        {
-            if (_getters.TryGetValue(propName, out var getter))
-            {
-                try { value = getter(instance); return true; }
-                catch (Exception ex) { Logger.Debug($"[TypeAccessor.TryGetPropertyValue] Property: {propName}, Instance: {instance.GetType().Name}, Error: {ex.Message}"); value = null; return false; }
-            }
-
-            // Try case-insensitive lookup if not found directly
-            foreach (var key in _getters.Keys)
-            {
-                if (string.Equals(key, propName, StringComparison.OrdinalIgnoreCase))
-                {
-                    try { value = _getters[key](instance); return true; }
-                    catch (Exception ex) { Logger.Debug($"[TypeAccessor.TryGetPropertyValue] Property: {key}, Instance: {instance.GetType().Name}, Error: {ex.Message}"); }
-                    break;
-                }
-            }
-
-            value = null;
-            return false;
-        }
-    }
-
-    private TypeAccessor GetTypeAccessor(Type type)
-    {
-        lock (_typeAccessorLock)
-        {
-            if (!_typeAccessors.TryGetValue(type, out var accessor))
-            {
-                accessor = CreateTypeAccessor(type);
-                _typeAccessors[type] = accessor;
-            }
-            return accessor;
-        }
-    }
-
-    private TypeAccessor CreateTypeAccessor(Type type)
-    {
-        var accessor = new TypeAccessor();
-        var props = type.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-        foreach (var p in props)
-        {
-            if (p.CanRead && p.GetIndexParameters().Length == 0)
-            {
-                accessor.AddGetter(p.Name, inst => p.GetValue(inst));
-            }
-        }
-        return accessor;
-    }
-    #endregion
 }

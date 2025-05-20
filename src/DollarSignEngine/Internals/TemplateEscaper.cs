@@ -1,26 +1,36 @@
 ﻿namespace DollarSignEngine.Internals;
 
+/// <summary>
+/// Provides functionality to escape and unescape template delimiters (double braces).
+/// This utility class is used for processing template strings before and after applying template operations.
+/// </summary>
 internal static class TemplateEscaper
 {
-    private static string OPEN = "@@OPEN@@";
-    private static string CLOSE = "@@CLOSE@@";
+    // Define escape tokens as readonly constants
+    private static readonly string OPEN = "@@OPEN@@";
+    private static readonly string CLOSE = "@@CLOSE@@";
 
-    public static string EscapeBlocks(string template) // 새로운 로직으로 대체
+    /// <summary>
+    /// Escapes double braces in a template string to prevent them from being interpreted as special characters
+    /// during template processing. Uses a two-pass algorithm to ensure proper handling of nested braces.
+    /// </summary>
+    public static string EscapeBlocks(string template)
     {
         if (string.IsNullOrEmpty(template))
         {
             return template;
         }
 
-        // 1단계: "{{" 를 "@@OPEN@@" 으로 정방향 치환
-        System.Text.StringBuilder pass1Builder = new System.Text.StringBuilder();
+        // IMPORTANT: The two-pass approach is critical for handling nested braces correctly
+        // First pass: Replace "{{" with "@@OPEN@@" (front to back)
+        System.Text.StringBuilder pass1Builder = new System.Text.StringBuilder(template.Length * 2);
         int i = 0;
         while (i < template.Length)
         {
             if (i <= template.Length - 2 && template[i] == '{' && template[i + 1] == '{')
             {
                 pass1Builder.Append(OPEN);
-                i += 2; // "{{" 두 글자 건너뛰기
+                i += 2; // Skip the "{{" pair
             }
             else
             {
@@ -28,29 +38,34 @@ internal static class TemplateEscaper
                 i++;
             }
         }
+
         string intermediateResult = pass1Builder.ToString();
 
-        // 2단계: "}}" 를 "@@CLOSE@@" 으로 역방향 치환
-        // 역방향 탐색 및 치환은 StringBuilder.Insert(0, ...)를 사용하여 구현
-        System.Text.StringBuilder finalBuilder = new System.Text.StringBuilder();
+        // Second pass: Replace "}}" with "@@CLOSE@@" (back to front)
+        // This backward scan is essential for handling nested templates correctly
+        System.Text.StringBuilder finalBuilder = new System.Text.StringBuilder(intermediateResult.Length * 2);
         int j = intermediateResult.Length - 1;
+
         while (j >= 0)
         {
-            // 현재 위치 j와 그 앞의 j-1 위치를 확인하여 "}}" 패턴을 찾음
             if (j > 0 && intermediateResult[j - 1] == '}' && intermediateResult[j] == '}')
             {
-                finalBuilder.Insert(0, CLOSE); // 결과의 맨 앞에 CLOSE 추가
-                j -= 2; // "}}" 두 글자 건너뛰기 (인덱스를 2만큼 앞으로 이동)
+                finalBuilder.Insert(0, CLOSE); // Insert at the beginning
+                j -= 2; // Skip the "}}" pair
             }
             else
             {
-                finalBuilder.Insert(0, intermediateResult[j]); // 결과의 맨 앞에 현재 문자 추가
+                finalBuilder.Insert(0, intermediateResult[j]); // Insert at the beginning
                 j--;
             }
         }
+
         return finalBuilder.ToString();
     }
 
+    /// <summary>
+    /// Unescapes previously escaped template delimiters back to their original form.
+    /// </summary>
     public static string UnescapeBlocks(string template)
     {
         if (string.IsNullOrEmpty(template))
@@ -58,19 +73,26 @@ internal static class TemplateEscaper
             return template;
         }
 
-        var result = new System.Text.StringBuilder();
+        var result = new System.Text.StringBuilder(template.Length);
         int i = 0;
+
         while (i < template.Length)
         {
-            if (i <= template.Length - OPEN.Length && template.Substring(i, OPEN.Length) == OPEN)
+            // Fast path check for OPEN token
+            if (i <= template.Length - OPEN.Length &&
+                template[i] == '@' && template[i + 1] == '@' &&
+                MatchesAt(template, i, OPEN))
             {
-                result.Append("{");
-                i += OPEN.Length; // Skip @@OPEN@@
+                result.Append('{');
+                i += OPEN.Length;
             }
-            else if (i <= template.Length - CLOSE.Length && template.Substring(i, CLOSE.Length) == CLOSE)
+            // Fast path check for CLOSE token
+            else if (i <= template.Length - CLOSE.Length &&
+                     template[i] == '@' && template[i + 1] == '@' &&
+                     MatchesAt(template, i, CLOSE))
             {
-                result.Append("}");
-                i += CLOSE.Length; // Skip @@CLOSE@@
+                result.Append('}');
+                i += CLOSE.Length;
             }
             else
             {
@@ -78,6 +100,29 @@ internal static class TemplateEscaper
                 i++;
             }
         }
+
         return result.ToString();
+    }
+
+    /// <summary>
+    /// Helper method to efficiently check if a substring matches at a specific position.
+    /// This avoids creating unnecessary string objects when comparing substrings.
+    /// </summary>
+    private static bool MatchesAt(string source, int startIndex, string target)
+    {
+        if (startIndex + target.Length > source.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < target.Length; i++)
+        {
+            if (source[startIndex + i] != target[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

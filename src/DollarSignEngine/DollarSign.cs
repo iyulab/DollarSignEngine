@@ -106,38 +106,6 @@ public static class DollarSign
         return obj;
     }
 
-    private static IDictionary<string, Type> GetPropertyTypes(object? obj)
-    {
-        var types = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase);
-        if (obj == null || obj is NoParametersContext) return types;
-
-        if (obj is ExpandoObject expando)
-        {
-            foreach (var kvp in (IDictionary<string, object?>)expando)
-            {
-                types[kvp.Key] = kvp.Value?.GetType() ?? typeof(object);
-            }
-        }
-        else if (obj is IDictionary<string, object?> dictObj)
-        {
-            foreach (var kvp in dictObj)
-            {
-                types[kvp.Key] = kvp.Value?.GetType() ?? typeof(object);
-            }
-        }
-        else
-        {
-            foreach (var property in obj.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
-            {
-                if (property.CanRead)
-                {
-                    types[property.Name] = property.PropertyType;
-                }
-            }
-        }
-        return types;
-    }
-
     private static IDictionary<string, object?> ToDictionary(object? obj)
     {
         if (obj == null || obj is NoParametersContext) return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
