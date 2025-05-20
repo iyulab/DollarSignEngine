@@ -19,6 +19,7 @@ The DollarSignEngine is a robust C# library designed to simplify the process of 
 
 - **Dynamic Expression Evaluation:** Evaluate C# expressions dynamically at runtime, with support for interpolation and complex logic.
 - **Flexible Parameter Injection:** Easily pass parameters into expressions using dictionaries, anonymous objects, or regular C# objects.
+- **Method & LINQ Support:** Call methods on objects and use LINQ expressions within interpolated strings.
 - **Format Specifiers & Alignment:** Full support for C# format specifiers and alignment in interpolated expressions.
 - **Custom Variable Resolution:** Provide custom variable resolvers for advanced use cases.
 - **Multiple Syntax Options:** Support for both standard C# interpolation `{expression}` and dollar-sign `${expression}` syntax.
@@ -98,6 +99,38 @@ var standardResult = await DollarSign.EvalAsync("Greeting: ${Hello()}", greeter)
 Console.WriteLine(standardResult); // Outputs: Greeting: ${Hello()}
 ```
 
+### Method Calls and LINQ Expressions
+
+```csharp
+// Calling methods on strings
+var text = "hello world";
+var result = await DollarSign.EvalAsync("Uppercase: {text.ToUpper()}", new { text });
+Console.WriteLine(result); // Outputs: Uppercase: HELLO WORLD
+
+// Using LINQ with collections
+var numbers = new List<int> { 1, 2, 3, 4, 5 };
+var result = await DollarSign.EvalAsync("Even numbers: {numbers.Where(n => n % 2 == 0).Count()}", new { numbers });
+Console.WriteLine(result); // Outputs: Even numbers: 2
+
+// Chaining method calls
+var data = "  sample text  ";
+var result = await DollarSign.EvalAsync("Processed: {data.Trim().ToUpper().Replace('A', 'X')}", new { data });
+Console.WriteLine(result); // Outputs: Processed: SXMPLE TEXT
+
+// Using strongly-typed custom objects for method calls
+public class Calculator
+{
+    public int Add(int a, int b) => a + b;
+    public int Multiply(int a, int b) => a * b;
+}
+
+var calc = new Calculator();
+var result = await DollarSign.EvalAsync("Sum: {calc.Add(5, 3)}, Product: {calc.Multiply(5, 3)}", new { calc });
+Console.WriteLine(result); // Outputs: Sum: 8, Product: 15
+```
+
+> **Important Note**: For method calls and LINQ expressions to work properly, you need to pass strongly-typed objects rather than anonymous types. This is because the engine needs access to the type information at runtime to properly compile and execute the methods.
+
 ### Format Specifiers and Alignment
 
 ```csharp
@@ -170,6 +203,35 @@ var standardResult = await DollarSign.EvalAsync("{ \"user\": { \"name\": \"{name
 Console.WriteLine(standardResult); 
 // Outputs: { "user": { "name": "Alice", "age": 30 } }
 ```
+
+## Method Calls and LINQ: Requirements and Limitations
+
+When using method calls and LINQ expressions within interpolated strings, there are a few important considerations:
+
+### Requirements
+
+1. **Strongly-Typed Objects**: For method calls to work properly, pass strongly-typed objects rather than anonymous types whenever possible. The engine needs access to type information at runtime.
+
+   ```csharp
+   // This works well - using a concrete class
+   var calculator = new Calculator();
+   var result = await DollarSign.EvalAsync("Result: {calculator.Add(5, 3)}", new { calculator });
+   
+   // May have limitations with anonymous types
+   var data = new { calc = (Func<int, int, int>)((a, b) => a + b) };
+   ```
+
+2. **Required References**: The engine automatically adds references to common assemblies like System.Linq, but custom assemblies might need to be explicitly included via reflection.
+
+3. **Type Compatibility**: Parameters in method calls must be compatible with expected parameter types. The engine attempts to convert types when possible.
+
+### Limitations
+
+1. **Anonymous Method Limitations**: Methods defined inline as lambda expressions in anonymous objects may have restricted functionality compared to methods in concrete classes.
+
+2. **Extension Method Support**: Extension methods (like many LINQ methods) require the appropriate namespace to be in scope. The engine includes common namespaces by default.
+
+3. **Performance Considerations**: Complex method calls and LINQ expressions require more compilation resources than simple property access.
 
 ## Configuration Options
 
@@ -266,3 +328,4 @@ var result = DollarSign.Eval("The answer is {value}.", parameters);
   DollarSign.ClearCache();
   ```
 - For templates that are evaluated many times with different parameters, consider reusing the same template string
+- Method calls and LINQ queries are more resource-intensive to compile than simple property access
