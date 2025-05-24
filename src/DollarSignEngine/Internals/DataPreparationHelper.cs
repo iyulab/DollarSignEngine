@@ -1,4 +1,4 @@
-﻿namespace DollarSignEngine.Internals;
+namespace DollarSignEngine.Internals;
 
 /// <summary>
 /// Helper methods for preparing and processing context data for evaluation.
@@ -220,11 +220,15 @@ internal static class DataPreparationHelper
 
     /// <summary>
     /// Converts an object to a dictionary with string keys.
+    /// Enhanced to handle null variables properly.
     /// </summary>
     private static IDictionary<string, object?> ToDictionary(object? obj)
     {
         if (obj == null || obj is DollarSign.NoParametersContext)
-            return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        {
+            // Return an empty dictionary that allows any key access but returns null
+            return new NullVariablesDictionary();
+        }
 
         // Already a dictionary with string keys and nullable values
         if (obj is IDictionary<string, object?> dictNullable)
@@ -438,5 +442,39 @@ internal static class DataPreparationHelper
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Special dictionary that returns null for any key access when variables parameter is null.
+    /// This mimics C# string interpolation behavior with null context.
+    /// </summary>
+    private class NullVariablesDictionary : IDictionary<string, object?>
+    {
+        public object? this[string key]
+        {
+            get => null; // Always return null for any key
+            set { } // Ignore sets
+        }
+
+        public ICollection<string> Keys => Array.Empty<string>();
+        public ICollection<object?> Values => Array.Empty<object?>();
+        public int Count => 0;
+        public bool IsReadOnly => true;
+
+        public void Add(string key, object? value) { }
+        public void Add(KeyValuePair<string, object?> item) { }
+        public void Clear() { }
+        public bool Contains(KeyValuePair<string, object?> item) => false;
+        public bool ContainsKey(string key) => true; // Pretend all keys exist but return null
+        public void CopyTo(KeyValuePair<string, object?>[] array, int arrayIndex) { }
+        public IEnumerator<KeyValuePair<string, object?>> GetEnumerator() => Enumerable.Empty<KeyValuePair<string, object?>>().GetEnumerator();
+        public bool Remove(string key) => false;
+        public bool Remove(KeyValuePair<string, object?> item) => false;
+        public bool TryGetValue(string key, out object? value)
+        {
+            value = null;
+            return true; // Always succeed but return null
+        }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }

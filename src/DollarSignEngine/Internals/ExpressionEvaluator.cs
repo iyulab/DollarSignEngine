@@ -1,4 +1,4 @@
-﻿using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.Scripting;
 using Microsoft.CSharp.RuntimeBinder;
@@ -8,13 +8,18 @@ using System.Text.RegularExpressions;
 namespace DollarSignEngine.Internals;
 
 /// <summary>
-/// Core expression evaluation engine. 
+/// Core expression evaluation engine with enhanced security and performance.
 /// </summary>
-internal class ExpressionEvaluator
+internal class ExpressionEvaluator : IDisposable
 {
-    // Script compilation and execution cache
-    private readonly LruCache<string, ScriptRunner<object>> _scriptCache =
-        new(1000, StringComparer.OrdinalIgnoreCase);
+    // Script compilation and execution cache with TTL
+    private readonly LruCache<string, ScriptRunner<object>> _scriptCache;
+    private readonly int _timeoutMs;
+    private volatile bool _disposed;
+
+    // Performance metrics
+    private long _totalEvaluations;
+    private long _cacheHits;
 
     // Regex patterns for parsing expressions
     private static readonly Regex SimpleIdentifierRegex =
@@ -23,19 +28,40 @@ internal class ExpressionEvaluator
     private static readonly Regex SimplePropertyPathRegex =
         new(@"^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$", RegexOptions.Compiled);
 
+    public ExpressionEvaluator(int cacheSize = 1000, TimeSpan? cacheTtl = null, int timeoutMs = 5000)
+    {
+        _scriptCache = new LruCache<string, ScriptRunner<object>>(
+            cacheSize,
+            cacheTtl ?? TimeSpan.FromHours(1));
+        _timeoutMs = timeoutMs;
+    }
+
     /// <summary>
-    /// Evaluates a template string, replacing expressions with their computed values.
+    /// Gets performance metrics for monitoring.
+    /// </summary>
+    public (long TotalEvaluations, long CacheHits, double HitRate) GetMetrics()
+    {
+        var total = Interlocked.Read(ref _totalEvaluations);
+        var hits = Interlocked.Read(ref _cacheHits);
+        return (total, hits, total == 0 ? 0.0 : (double)hits / total);
+    }
+
+    /// <summary>
+    /// Evaluates a template string asynchronously, replacing expressions with their computed values.
     /// </summary>
     public async Task<string> EvaluateAsync(string template, object? context, DollarSignOptions options)
     {
         if (string.IsNullOrEmpty(template))
             return string.Empty;
 
+        ThrowIfDisposed();
+        Interlocked.Increment(ref _totalEvaluations);
+
         // 1. Preprocess: replace {{...}} escape blocks with unique placeholders
         var work = TemplateEscaper.EscapeBlocks(template);
 
-        // 2. Main processing on tokenized string
-        var sb = new StringBuilder();
+        // 2. Main processing with optimized StringBuilder
+        var sb = new StringBuilder(template.Length * 2); // Pre-allocate capacity
         int i = 0, n = work.Length;
 
         while (i < n)
@@ -57,11 +83,11 @@ internal class ExpressionEvaluator
             {
                 int offset = isDollarExpr ? 2 : 1;
                 int exprStart = i + offset;
-                int exprEnd = FindMatchingBrace(work, exprStart, '{', '}');
+                int exprEnd = FindMatchingBrace(work.AsSpan(), exprStart, '{', '}');
 
                 if (exprEnd < 0)
                 {
-                    sb.Append(work.Substring(i, offset));
+                    sb.Append(work.AsSpan(i, offset));
                     i += offset;
                     continue;
                 }
@@ -92,6 +118,19 @@ internal class ExpressionEvaluator
 
                 try
                 {
+                    // Security validation first (only if SecurityValidator is available)
+                    try
+                    {
+                        if (!SecurityValidator.IsSafeExpression(finalExpr, options.SecurityLevel))
+                        {
+                            throw new DollarSignEngineException($"Expression blocked by security policy: {finalExpr}");
+                        }
+                    }
+                    catch (TypeLoadException)
+                    {
+                        // SecurityValidator not available, skip validation
+                    }
+
                     // Try to resolve using custom resolver first
                     if (options.VariableResolver != null)
                         value = options.VariableResolver(finalExpr);
@@ -123,7 +162,8 @@ internal class ExpressionEvaluator
 
                     if (options.ErrorHandler != null)
                     {
-                        sb.Append(options.ErrorHandler(finalExpr, ex));
+                        var errorResult = options.ErrorHandler(finalExpr, ex);
+                        sb.Append(errorResult ?? string.Empty);
                         handled = true;
                     }
                     else if (options.ThrowOnError)
@@ -134,13 +174,25 @@ internal class ExpressionEvaluator
                     }
                     else if (options.TreatUndefinedVariablesInSimpleExpressionsAsEmpty &&
                               SimpleIdentifierRegex.IsMatch(finalExpr) &&
-                              !finalExpr.Contains('.') &&
-                              (ex is KeyNotFoundException ||
-                               ex.InnerException is KeyNotFoundException ||
-                               ex is RuntimeBinderException ||
-                               (ex is DollarSignEngineException de && de.InnerException is RuntimeBinderException)))
+                              !finalExpr.Contains('.'))
                     {
+                        // For simple identifiers like {name}, treat as empty when variable doesn't exist
                         handled = true;
+                        value = null; // Will be converted to empty string in ApplyFormat
+                    }
+                    else if (IsVariableNotFoundError(ex))
+                    {
+                        // General handling for variable not found errors
+                        handled = true;
+                        value = null; // Will be converted to empty string in ApplyFormat
+                    }
+
+                    if (!handled)
+                    {
+                        // For debugging purposes, include error message but don't crash
+                        sb.Append($"[ERROR: {ex.Message}]");
+                        i = exprEnd + 1;
+                        continue; // Skip formatting for errors
                     }
                 }
 
@@ -168,28 +220,48 @@ internal class ExpressionEvaluator
     }
 
     /// <summary>
-    /// Finds a matching closing brace for a given opening brace position.
+    /// Checks if an exception indicates a variable was not found.
     /// </summary>
-    private int FindMatchingBrace(string text, int startIndex, char openBrace, char closeBrace)
+    private static bool IsVariableNotFoundError(Exception ex)
+    {
+        return ex is KeyNotFoundException ||
+               ex.InnerException is KeyNotFoundException ||
+               ex is RuntimeBinderException ||
+               (ex is DollarSignEngineException de && de.InnerException is RuntimeBinderException) ||
+               ex.Message.Contains("does not exist in the current context") ||
+               ex.Message.Contains("not found") ||
+               ex.Message.Contains("undefined");
+    }
+
+    /// <summary>
+    /// Finds a matching closing brace for a given opening brace position using Span for better performance.
+    /// </summary>
+    private static int FindMatchingBrace(ReadOnlySpan<char> text, int startIndex, char openBrace, char closeBrace)
     {
         int depth = 1;
         for (int k = startIndex; k < text.Length; k++)
         {
+            char currentChar = text[k];
+
             // Skip string literals
-            if (text[k] == '"' || text[k] == '\'')
+            if (currentChar == '"' || currentChar == '\'')
             {
-                char quote = text[k];
+                char quote = currentChar;
                 k++;
-                while (k < text.Length && (text[k] != quote || text[k - 1] == '\\'))
+                while (k < text.Length)
                 {
+                    if (text[k] == quote && (k == 0 || text[k - 1] != '\\'))
+                        break;
+                    if (text[k] == '\\' && k + 1 < text.Length)
+                        k++; // Skip escape sequence
                     k++;
                 }
                 if (k >= text.Length) return -1; // Unterminated string
                 continue;
             }
 
-            if (text[k] == openBrace) depth++;
-            else if (text[k] == closeBrace)
+            if (currentChar == openBrace) depth++;
+            else if (currentChar == closeBrace)
             {
                 depth--;
                 if (depth == 0) return k;
@@ -311,7 +383,7 @@ internal class ExpressionEvaluator
     }
 
     /// <summary>
-    /// Evaluates a C# script expression against a context object.
+    /// Evaluates a C# script expression against a context object with timeout support.
     /// </summary>
     private async Task<object?> EvaluateScriptAsync(string expression, object? context, DollarSignOptions options)
     {
@@ -356,6 +428,7 @@ internal class ExpressionEvaluator
             if (_scriptCache.TryGetValue(cacheKey, out runner))
             {
                 Logger.Debug($"[EvaluateScriptAsync] Cache hit for expression: '{processedExpression}'");
+                Interlocked.Increment(ref _cacheHits);
             }
             else
             {
@@ -417,10 +490,15 @@ internal class ExpressionEvaluator
 
         try
         {
-            // Execute the script
-            var result = await runner(effectiveGlobals, CancellationToken.None);
+            // Execute the script with timeout
+            using var cts = new CancellationTokenSource(_timeoutMs);
+            var result = await runner(effectiveGlobals, cts.Token);
             Logger.Debug($"[EvaluateScriptAsync END] Result: \"{result}\"");
             return result;
+        }
+        catch (OperationCanceledException)
+        {
+            throw new DollarSignEngineException($"Script execution timed out after {_timeoutMs}ms: {processedExpression}");
         }
         catch (Exception ex)
         {
@@ -434,9 +512,40 @@ internal class ExpressionEvaluator
     /// </summary>
     public void ClearCache()
     {
+        ThrowIfDisposed();
         _scriptCache.Clear();
         TypeAccessorFactory.ClearCache();
         TypeNameHelper.ClearCaches();
+
+        // Reset metrics
+        Interlocked.Exchange(ref _totalEvaluations, 0);
+        Interlocked.Exchange(ref _cacheHits, 0);
+
         Logger.Info("[ExpressionEvaluator.ClearCache] All caches cleared.");
+    }
+
+    private void ThrowIfDisposed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(ExpressionEvaluator));
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+
+        try
+        {
+            _scriptCache?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"[ExpressionEvaluator] Error during disposal: {ex.Message}");
+        }
+
+        GC.SuppressFinalize(this);
     }
 }

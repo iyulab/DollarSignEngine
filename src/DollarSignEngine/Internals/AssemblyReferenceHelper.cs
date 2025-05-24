@@ -1,16 +1,16 @@
-﻿namespace DollarSignEngine.Internals;
+using System.Collections.Concurrent;
+
+namespace DollarSignEngine.Internals;
 
 /// <summary>
 /// Helper class for managing assembly references for script compilation.
+/// Fixed deadlock issues with simplified caching strategy and added runtime binder support.
 /// </summary>
 internal static class AssemblyReferenceHelper
 {
-    // Cache for common assemblies to avoid repetitive loading
-    private static readonly LruCache<string, MetadataReference> _assemblyReferenceCache =
-        new LruCache<string, MetadataReference>(100);
-
-    // Lock for thread safety in assembly loading
-    private static readonly object _assemblyCacheLock = new();
+    // Simple cache without complex locking - use ConcurrentDictionary for thread safety
+    private static readonly ConcurrentDictionary<string, MetadataReference> _assemblyReferenceCache =
+        new ConcurrentDictionary<string, MetadataReference>();
 
     // Core assemblies that are always included
     private static readonly HashSet<string> _coreAssemblyNames = new()
@@ -43,14 +43,45 @@ internal static class AssemblyReferenceHelper
             }
         }
 
-        // Explicitly add System.Core where LINQ is defined
+        // Explicitly add critical assemblies for dynamic support
         try
         {
+            // System.Core for LINQ
             AddValidAssembly(assemblies, Assembly.Load("System.Core"));
         }
         catch (Exception ex)
         {
             Logger.Warning($"Failed to load System.Core assembly: {ex.Message}");
+        }
+
+        try
+        {
+            // Microsoft.CSharp for dynamic runtime binding
+            AddValidAssembly(assemblies, Assembly.Load("Microsoft.CSharp"));
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"Failed to load Microsoft.CSharp assembly: {ex.Message}");
+        }
+
+        try
+        {
+            // System.Dynamic.Runtime for dynamic objects
+            AddValidAssembly(assemblies, Assembly.Load("System.Dynamic.Runtime"));
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"Failed to load System.Dynamic.Runtime assembly: {ex.Message}");
+        }
+
+        // Add runtime assemblies that might be needed for dynamic operations
+        try
+        {
+            AddValidAssembly(assemblies, typeof(System.Runtime.CompilerServices.DynamicAttribute).Assembly);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"Failed to load runtime assembly: {ex.Message}");
         }
 
         // Add our own assemblies
@@ -100,6 +131,7 @@ internal static class AssemblyReferenceHelper
 
     /// <summary>
     /// Gets or creates a cached metadata reference for an assembly.
+    /// Uses simple concurrent dictionary to avoid deadlock issues.
     /// </summary>
     private static MetadataReference GetOrCreateMetadataReference(Assembly assembly)
     {
@@ -109,7 +141,17 @@ internal static class AssemblyReferenceHelper
         }
 
         return _assemblyReferenceCache.GetOrAdd(assembly.Location, location =>
-            MetadataReference.CreateFromFile(location));
+        {
+            try
+            {
+                return MetadataReference.CreateFromFile(location);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning($"Failed to create metadata reference for {location}: {ex.Message}");
+                throw;
+            }
+        });
     }
 
     /// <summary>

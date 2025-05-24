@@ -3,15 +3,15 @@
     <LangVersion>preview</LangVersion>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>1.3.0</Version>
+    <Version>1.3.1</Version>
     <Authors>iyulab</Authors>
     <Company>Iyulab Corporation</Company>
     <PackageTags>iyulab</PackageTags>
     <PackageIcon>logo.png</PackageIcon>
     <Owners>iyulab-rnd</Owners>
     <Copyright>Copyright (c) Iyulab Corporation 2024.</Copyright>
-    <PackageProjectUrl>https://github.com/iyulab-rnd/DollarSignEngine</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/iyulab-rnd/DollarSignEngine</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/iyulab/DollarSignEngine</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/iyulab/DollarSignEngine</RepositoryUrl>
     <PackageIconUrl>https://raw.githubusercontent.com/iyulab-rnd/public/main/images/iyulab_128.png</PackageIconUrl>
     <PackageTags>Dynamic Expression, String Interpolation, Runtime Evaluation, Scripting, Dynamic Code, Expression Engine</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>

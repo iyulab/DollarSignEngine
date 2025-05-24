@@ -328,4 +328,4 @@ var result = DollarSign.Eval("The answer is {value}.", parameters);
   DollarSign.ClearCache();
   ```
 - For templates that are evaluated many times with different parameters, consider reusing the same template string
-- Method calls and LINQ queries are more resource-intensive to compile than simple property access
+  - Method calls and LINQ queries are more resource-intensive to compile than simple property access
