@@ -81,11 +81,6 @@ public class DollarSignOptions
     internal object? GlobalData { get; set; }
 
     /// <summary>
-    /// Internal use: Carries type information for the CastingDictionaryAccessRewriter.
-    /// </summary>
-    internal IDictionary<string, Type>? GlobalVariableTypes { get; set; }
-
-    /// <summary>
     /// Gets default options.
     /// </summary>
     public static DollarSignOptions Default => new();
@@ -97,8 +92,8 @@ public class DollarSignOptions
     {
         SecurityLevel = SecurityLevel.Strict,
         ThrowOnError = true,
-        TimeoutMs = 1000, // 1 second timeout for strict mode
-        CacheSize = 500   // Smaller cache for strict mode
+        TimeoutMs = 1000,
+        CacheSize = 500
     };
 
     /// <summary>
@@ -107,13 +102,12 @@ public class DollarSignOptions
     public static DollarSignOptions Moderate => new()
     {
         SecurityLevel = SecurityLevel.Moderate,
-        TimeoutMs = 3000, // 3 second timeout
+        TimeoutMs = 3000,
         CacheSize = 750
     };
 
     /// <summary>
-    /// Validates the options for consistency and security.
-    /// Only validates critical errors, warnings are optional.
+    /// Validates options for consistency and security.
     /// </summary>
     public void Validate()
     {
@@ -128,43 +122,10 @@ public class DollarSignOptions
 
         if (CacheTtl <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(CacheTtl), "Cache TTL must be greater than zero.");
-
-        // Only log warnings if Logger is available and won't cause issues
-        try
-        {
-            // Security validation warnings (only log, don't throw)
-            if (SecurityLevel == SecurityLevel.Permissive && !ThrowOnError)
-            {
-                // Logger.Warning("Permissive security level with error suppression may pose security risks.");
-                // Commented out to avoid test failures - this is just a warning
-            }
-
-            if (VariableResolver != null && ErrorHandler != null)
-            {
-                // Logger.Warning("Both VariableResolver and ErrorHandler are set. ErrorHandler takes precedence for error handling.");
-                // Commented out to avoid test failures - this is just a warning
-            }
-
-            if (TimeoutMs > 30000) // 30 seconds
-            {
-                // Logger.Warning($"High timeout value ({TimeoutMs}ms) may allow long-running expressions that could impact performance.");
-                // Commented out to avoid test failures - this is just a warning
-            }
-
-            if (CacheSize > 10000)
-            {
-                // Logger.Warning($"Large cache size ({CacheSize}) may consume significant memory.");
-                // Commented out to avoid test failures - this is just a warning
-            }
-        }
-        catch
-        {
-            // Ignore logging errors during validation
-        }
     }
 
     /// <summary>
-    /// Creates a deep clone of the options.
+    /// Creates deep clone of options.
     /// </summary>
     public DollarSignOptions Clone() => new()
     {
@@ -179,7 +140,6 @@ public class DollarSignOptions
         TimeoutMs = this.TimeoutMs,
         CacheSize = this.CacheSize,
         CacheTtl = this.CacheTtl,
-        GlobalVariableTypes = this.GlobalVariableTypes, // Shallow copy is fine for the dictionary reference
-        GlobalData = this.GlobalData // Store the global data in the clone
+        GlobalData = this.GlobalData
     };
 }

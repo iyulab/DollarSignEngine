@@ -24,12 +24,8 @@ public static class DollarSign
     }
 
     /// <summary>
-    /// Evaluates a template string asynchronously, replacing expressions with their computed values.
+    /// Evaluates template string asynchronously, replacing expressions with computed values.
     /// </summary>
-    /// <param name="expression">The template string containing expressions to evaluate.</param>
-    /// <param name="variables">Optional context object with variables for the template.</param>
-    /// <param name="options">Optional customization options for the evaluation.</param>
-    /// <returns>The evaluated template with expressions replaced by their values.</returns>
     public static async Task<string> EvalAsync(
         string expression,
         object? variables = null,
@@ -39,18 +35,13 @@ public static class DollarSign
             return string.Empty;
 
         var effectiveOptions = options?.Clone() ?? DollarSignOptions.Default;
-
-        // Validate options for security and consistency
         effectiveOptions.Validate();
 
         Logger.Debug($"[DollarSign.EvalAsync] Expression: {expression}");
 
-        // Prepare context for evaluator
-        object contextForEvaluator = DataPreparationHelper.PrepareContext(variables, effectiveOptions);
-
         try
         {
-            string result = await Evaluator.EvaluateAsync(expression, contextForEvaluator, effectiveOptions);
+            string result = await Evaluator.EvaluateAsync(expression, variables, effectiveOptions);
             return result;
         }
         catch (DollarSignEngineException)
@@ -68,12 +59,8 @@ public static class DollarSign
     }
 
     /// <summary>
-    /// Evaluates a template string synchronously, replacing expressions with their computed values.
+    /// Evaluates template string synchronously, replacing expressions with computed values.
     /// </summary>
-    /// <param name="expression">The template string containing expressions to evaluate.</param>
-    /// <param name="variables">Optional context object with variables for the template.</param>
-    /// <param name="options">Optional customization options for the evaluation.</param>
-    /// <returns>The evaluated template with expressions replaced by their values.</returns>
     public static string Eval(
         string expression,
         object? variables = null,
@@ -81,13 +68,8 @@ public static class DollarSign
         => EvalAsync(expression, variables, options).GetAwaiter().GetResult();
 
     /// <summary>
-    /// Evaluates a template with strong typing for the result.
+    /// Evaluates template with strong typing for the result.
     /// </summary>
-    /// <typeparam name="T">The expected return type.</typeparam>
-    /// <param name="expression">The template string containing expressions to evaluate.</param>
-    /// <param name="variables">Optional context object with variables for the template.</param>
-    /// <param name="options">Optional customization options for the evaluation.</param>
-    /// <returns>The evaluated result cast to the specified type.</returns>
     public static async Task<T> EvalAsync<T>(
         string expression,
         object? variables = null,
@@ -98,7 +80,6 @@ public static class DollarSign
         if (result is T typedResult)
             return typedResult;
 
-        // Attempt type conversion
         try
         {
             if (typeof(T) == typeof(string))
@@ -114,7 +95,7 @@ public static class DollarSign
     }
 
     /// <summary>
-    /// Evaluates a template with strong typing synchronously.
+    /// Evaluates template with strong typing synchronously.
     /// </summary>
     public static T Eval<T>(
         string expression,
@@ -125,10 +106,6 @@ public static class DollarSign
     /// <summary>
     /// Evaluates multiple templates in parallel for better performance.
     /// </summary>
-    /// <param name="templates">Dictionary of template names and expressions.</param>
-    /// <param name="variables">Optional context object with variables for the templates.</param>
-    /// <param name="options">Optional customization options for the evaluation.</param>
-    /// <returns>Dictionary of template names and their evaluated results.</returns>
     public static async Task<Dictionary<string, string>> EvalManyAsync(
         Dictionary<string, string> templates,
         object? variables = null,
@@ -157,11 +134,8 @@ public static class DollarSign
     }
 
     /// <summary>
-    /// Validates if an expression is safe without executing it.
+    /// Validates if expression is safe without executing it.
     /// </summary>
-    /// <param name="expression">The expression to validate.</param>
-    /// <param name="securityLevel">The security level to apply.</param>
-    /// <returns>True if the expression is considered safe.</returns>
     public static bool ValidateExpression(string expression, SecurityLevel securityLevel = SecurityLevel.Permissive)
     {
         return SecurityValidator.IsSafeExpression(expression, securityLevel);

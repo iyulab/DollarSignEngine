@@ -12,16 +12,13 @@ namespace DollarSignEngine.Internals;
 /// </summary>
 internal class ExpressionEvaluator : IDisposable
 {
-    // Script compilation and execution cache with TTL
     private readonly LruCache<string, ScriptRunner<object>> _scriptCache;
     private readonly int _timeoutMs;
     private volatile bool _disposed;
 
-    // Performance metrics
     private long _totalEvaluations;
     private long _cacheHits;
 
-    // Regex patterns for parsing expressions
     private static readonly Regex SimpleIdentifierRegex =
         new(@"^[a-zA-Z_][a-zA-Z0-9_]*$", RegexOptions.Compiled);
 
@@ -47,7 +44,7 @@ internal class ExpressionEvaluator : IDisposable
     }
 
     /// <summary>
-    /// Evaluates a template string asynchronously, replacing expressions with their computed values.
+    /// Evaluates template string, replacing expressions with computed values.
     /// </summary>
     public async Task<string> EvaluateAsync(string template, object? context, DollarSignOptions options)
     {
@@ -57,18 +54,17 @@ internal class ExpressionEvaluator : IDisposable
         ThrowIfDisposed();
         Interlocked.Increment(ref _totalEvaluations);
 
-        // 1. Preprocess: replace {{...}} escape blocks with unique placeholders
-        var work = TemplateEscaper.EscapeBlocks(template);
+        // Prepare evaluation context
+        var evaluationContext = PrepareEvaluationContext(context, options);
 
-        // 2. Main processing with optimized StringBuilder
-        var sb = new StringBuilder(template.Length * 2); // Pre-allocate capacity
+        var work = TemplateEscaper.EscapeBlocks(template);
+        var sb = new StringBuilder(template.Length * 2);
         int i = 0, n = work.Length;
 
         while (i < n)
         {
             char currentChar = work[i];
 
-            // Handle literal '}}' -> '}'
             if (currentChar == '}' && i + 1 < n && work[i + 1] == '}')
             {
                 sb.Append('}');
@@ -92,13 +88,11 @@ internal class ExpressionEvaluator : IDisposable
                     continue;
                 }
 
-                // Extract and parse expression content
                 string content = work.Substring(exprStart, exprEnd - exprStart);
                 string expr = content;
                 string? format = null;
                 string? align = null;
 
-                // Extract formatting and alignment info
                 int fmtPos = FindFirstUnnestedChar(expr, ':');
                 if (fmtPos >= 0)
                 {
@@ -118,20 +112,11 @@ internal class ExpressionEvaluator : IDisposable
 
                 try
                 {
-                    // Security validation first (only if SecurityValidator is available)
-                    try
+                    if (!SecurityValidator.IsSafeExpression(finalExpr, options.SecurityLevel))
                     {
-                        if (!SecurityValidator.IsSafeExpression(finalExpr, options.SecurityLevel))
-                        {
-                            throw new DollarSignEngineException($"Expression blocked by security policy: {finalExpr}");
-                        }
-                    }
-                    catch (TypeLoadException)
-                    {
-                        // SecurityValidator not available, skip validation
+                        throw new DollarSignEngineException($"Expression blocked by security policy: {finalExpr}");
                     }
 
-                    // Try to resolve using custom resolver first
                     if (options.VariableResolver != null)
                         value = options.VariableResolver(finalExpr);
 
@@ -141,18 +126,16 @@ internal class ExpressionEvaluator : IDisposable
                         {
                             value = string.Empty;
                         }
-                        // For dot-notation properties, use faster property resolver
                         else if (SimplePropertyPathRegex.IsMatch(finalExpr) &&
-                                context is not ScriptHost &&
-                                context is not DictionaryWrapper &&
+                                !(evaluationContext.Context is ScriptHost) &&
+                                !(evaluationContext.Context is DictionaryWrapper) &&
                                 finalExpr.Contains('.'))
                         {
-                            value = PropertyResolver.ResolveNestedProperty(context, finalExpr);
+                            value = PropertyResolver.ResolveNestedProperty(evaluationContext.Context, finalExpr);
                         }
                         else
                         {
-                            // Full script evaluation for complex expressions
-                            value = await EvaluateScriptAsync(finalExpr, context, options);
+                            value = await EvaluateScriptAsync(finalExpr, evaluationContext, options);
                         }
                     }
                 }
@@ -162,8 +145,6 @@ internal class ExpressionEvaluator : IDisposable
 
                     if (options.ErrorHandler != null)
                     {
-                        var errorResult = options.ErrorHandler(finalExpr, ex);
-                        sb.Append(errorResult ?? string.Empty);
                         handled = true;
                     }
                     else if (options.ThrowOnError)
@@ -176,23 +157,20 @@ internal class ExpressionEvaluator : IDisposable
                               SimpleIdentifierRegex.IsMatch(finalExpr) &&
                               !finalExpr.Contains('.'))
                     {
-                        // For simple identifiers like {name}, treat as empty when variable doesn't exist
                         handled = true;
-                        value = null; // Will be converted to empty string in ApplyFormat
+                        value = null;
                     }
                     else if (IsVariableNotFoundError(ex))
                     {
-                        // General handling for variable not found errors
                         handled = true;
-                        value = null; // Will be converted to empty string in ApplyFormat
+                        value = null;
                     }
 
                     if (!handled)
                     {
-                        // For debugging purposes, include error message but don't crash
                         sb.Append($"[ERROR: {ex.Message}]");
                         i = exprEnd + 1;
-                        continue; // Skip formatting for errors
+                        continue;
                     }
                 }
 
@@ -201,7 +179,6 @@ internal class ExpressionEvaluator : IDisposable
                 continue;
             }
 
-            // Literal '{' when dollar syntax is enabled
             if (options.SupportDollarSignSyntax && currentChar == '{')
             {
                 sb.Append('{');
@@ -209,18 +186,291 @@ internal class ExpressionEvaluator : IDisposable
                 continue;
             }
 
-            // Default literal char
             sb.Append(currentChar);
             i++;
         }
 
-        // 3. Postprocess: restore escape blocks
         string result = TemplateEscaper.UnescapeBlocks(sb.ToString());
         return result;
     }
 
     /// <summary>
-    /// Checks if an exception indicates a variable was not found.
+    /// Prepares evaluation context from variables and options.
+    /// </summary>
+    private EvaluationContext PrepareEvaluationContext(object? variables, DollarSignOptions options)
+    {
+        var localVariables = variables ?? new DollarSign.NoParametersContext();
+        var globalData = options.GlobalData;
+
+        var localDict = ConvertToDictionary(localVariables);
+        var globalDict = ConvertToDictionary(globalData);
+
+        var mergedDict = MergeDictionaries(globalDict, localDict);
+
+        var globalVariableTypes = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kvp in mergedDict)
+        {
+            if (kvp.Value != null)
+            {
+                globalVariableTypes[kvp.Key] = kvp.Value.GetType();
+            }
+            else
+            {
+                globalVariableTypes[kvp.Key] = typeof(object);
+            }
+        }
+
+        var scriptHost = new ScriptHost(mergedDict);
+        return new EvaluationContext(scriptHost, globalVariableTypes);
+    }
+
+    /// <summary>
+    /// Converts object to dictionary with string keys.
+    /// </summary>
+    private IDictionary<string, object?> ConvertToDictionary(object? obj)
+    {
+        if (obj == null || obj is DollarSign.NoParametersContext)
+        {
+            return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        if (obj is IDictionary<string, object?> dictNullable)
+        {
+            var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in dictNullable)
+            {
+                newDict[kvp.Key] = ConvertToEvalFriendlyObject(kvp.Value);
+            }
+            return newDict;
+        }
+
+        if (obj is IDictionary<string, object> dictNonNullable)
+        {
+            var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in dictNonNullable)
+            {
+                newDict[kvp.Key] = ConvertToEvalFriendlyObject(kvp.Value);
+            }
+            return newDict;
+        }
+
+        if (obj is ExpandoObject expandoObj)
+        {
+            var dynamicDict = (IDictionary<string, object?>)expandoObj;
+            var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in dynamicDict)
+            {
+                newDict[kvp.Key] = ConvertToEvalFriendlyObject(kvp.Value);
+            }
+            return newDict;
+        }
+
+        if (obj is IDictionary dictionary && obj.GetType().IsGenericType)
+        {
+            Type genericTypeDef = obj.GetType().GetGenericTypeDefinition();
+            if (genericTypeDef == typeof(Dictionary<,>) || genericTypeDef == typeof(IDictionary<,>))
+            {
+                var keyType = obj.GetType().GetGenericArguments()[0];
+
+                if (keyType == typeof(string) || keyType.IsPrimitive || keyType == typeof(Guid))
+                {
+                    var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                    foreach (DictionaryEntry entry in dictionary)
+                    {
+                        string key = entry.Key?.ToString() ?? string.Empty;
+                        newDict[key] = ConvertToEvalFriendlyObject(entry.Value);
+                    }
+                    return newDict;
+                }
+            }
+        }
+
+        if (obj is IDictionary nonGenericDict)
+        {
+            var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (DictionaryEntry entry in nonGenericDict)
+            {
+                string key = entry.Key?.ToString() ?? string.Empty;
+                newDict[key] = ConvertToEvalFriendlyObject(entry.Value);
+            }
+            return newDict;
+        }
+
+        var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+        // Handle anonymous types specially - convert to dictionary
+        if (DataPreparationHelper.IsAnonymousType(obj.GetType()))
+        {
+            foreach (var property in obj.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (property.CanRead)
+                {
+                    var propValue = property.GetValue(obj);
+                    result[property.Name] = ConvertToEvalFriendlyObject(propValue);
+                }
+            }
+            return result;
+        }
+
+        // For regular objects, extract properties but keep the original object intact
+        // This preserves LINQ and other functionality
+        if (obj != null && !(obj is DollarSign.NoParametersContext))
+        {
+            foreach (var property in obj.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (property.CanRead)
+                {
+                    var propValue = property.GetValue(obj);
+                    // Only convert the property values, not the root object
+                    result[property.Name] = propValue;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Converts object to format suitable for evaluation with proper anonymous type handling.
+    /// </summary>
+    private object? ConvertToEvalFriendlyObject(object? obj)
+    {
+        if (obj == null) return null;
+        Type type = obj.GetType();
+
+        // Handle anonymous types by converting to ExpandoObject
+        if (DataPreparationHelper.IsAnonymousType(type))
+        {
+            var expando = new ExpandoObject();
+            var dict = (IDictionary<string, object?>)expando;
+            foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (property.CanRead)
+                {
+                    dict[property.Name] = ConvertToEvalFriendlyObject(property.GetValue(obj));
+                }
+            }
+            return expando;
+        }
+
+        // Handle arrays - only convert if they contain anonymous types
+        if (type.IsArray)
+        {
+            var array = (Array)obj;
+            Type? elementType = type.GetElementType();
+
+            if (elementType == null) return obj;
+
+            // Only convert arrays containing anonymous types
+            if (DataPreparationHelper.IsAnonymousType(elementType))
+            {
+                var convertedItems = new List<object?>(array.Length);
+                foreach (var item in array)
+                {
+                    convertedItems.Add(ConvertToEvalFriendlyObject(item));
+                }
+                return convertedItems.ToArray();
+            }
+
+            // For arrays of object type that might contain anonymous types, check each element
+            if (elementType == typeof(object))
+            {
+                bool hasAnonymousTypes = false;
+                foreach (var item in array)
+                {
+                    if (item != null && DataPreparationHelper.IsAnonymousType(item.GetType()))
+                    {
+                        hasAnonymousTypes = true;
+                        break;
+                    }
+                }
+
+                if (hasAnonymousTypes)
+                {
+                    var convertedItems = new List<object?>(array.Length);
+                    foreach (var item in array)
+                    {
+                        convertedItems.Add(ConvertToEvalFriendlyObject(item));
+                    }
+                    return convertedItems.ToArray();
+                }
+            }
+
+            // For all other arrays, return as-is to preserve LINQ functionality
+            return obj;
+        }
+
+        // Handle collections - only convert if they contain anonymous types
+        if (obj is IList list && type.IsGenericType)
+        {
+            Type listType = type.GetGenericTypeDefinition();
+            if (listType == typeof(List<>) || listType == typeof(IList<>))
+            {
+                Type elementType = type.GetGenericArguments()[0];
+
+                // Only convert if element type is anonymous or object (which might contain anonymous)
+                if (DataPreparationHelper.IsAnonymousType(elementType) || elementType == typeof(object))
+                {
+                    var newList = new List<object?>(list.Count);
+                    foreach (var item in list)
+                    {
+                        newList.Add(ConvertToEvalFriendlyObject(item));
+                    }
+                    return newList;
+                }
+            }
+        }
+
+        // Handle dictionaries - always convert for consistency
+        if (obj is IDictionary<string, object?> dictNullable)
+        {
+            var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in dictNullable)
+            {
+                newDict[kvp.Key] = ConvertToEvalFriendlyObject(kvp.Value);
+            }
+            return newDict;
+        }
+
+        if (obj is IDictionary<string, object> dictNonNullable)
+        {
+            var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in dictNonNullable)
+            {
+                newDict[kvp.Key] = ConvertToEvalFriendlyObject(kvp.Value);
+            }
+            return newDict;
+        }
+
+        // For all other types (including regular classes), return as-is
+        // This preserves LINQ functionality and other object behaviors
+        return obj;
+    }
+
+    /// <summary>
+    /// Merges dictionaries with local taking precedence.
+    /// </summary>
+    private IDictionary<string, object?> MergeDictionaries(
+        IDictionary<string, object?> globalDict,
+        IDictionary<string, object?> localDict)
+    {
+        var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var kvp in globalDict)
+        {
+            result[kvp.Key] = kvp.Value;
+        }
+
+        foreach (var kvp in localDict)
+        {
+            result[kvp.Key] = kvp.Value;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Checks if exception indicates variable not found.
     /// </summary>
     private static bool IsVariableNotFoundError(Exception ex)
     {
@@ -234,7 +484,7 @@ internal class ExpressionEvaluator : IDisposable
     }
 
     /// <summary>
-    /// Finds a matching closing brace for a given opening brace position using Span for better performance.
+    /// Finds matching brace using Span for performance.
     /// </summary>
     private static int FindMatchingBrace(ReadOnlySpan<char> text, int startIndex, char openBrace, char closeBrace)
     {
@@ -243,7 +493,6 @@ internal class ExpressionEvaluator : IDisposable
         {
             char currentChar = text[k];
 
-            // Skip string literals
             if (currentChar == '"' || currentChar == '\'')
             {
                 char quote = currentChar;
@@ -253,10 +502,10 @@ internal class ExpressionEvaluator : IDisposable
                     if (text[k] == quote && (k == 0 || text[k - 1] != '\\'))
                         break;
                     if (text[k] == '\\' && k + 1 < text.Length)
-                        k++; // Skip escape sequence
+                        k++;
                     k++;
                 }
-                if (k >= text.Length) return -1; // Unterminated string
+                if (k >= text.Length) return -1;
                 continue;
             }
 
@@ -267,11 +516,11 @@ internal class ExpressionEvaluator : IDisposable
                 if (depth == 0) return k;
             }
         }
-        return -1; // No matching brace found
+        return -1;
     }
 
     /// <summary>
-    /// Finds the first occurrence of a character that is not nested within parentheses or quotes.
+    /// Finds first occurrence of character not nested within parentheses or quotes.
     /// </summary>
     private static int FindFirstUnnestedChar(string s, char ch)
     {
@@ -281,18 +530,18 @@ internal class ExpressionEvaluator : IDisposable
 
         for (int k = 0; k < s.Length; k++)
         {
-            if (quoteDepth > 0) // Inside a string literal
+            if (quoteDepth > 0)
             {
-                if (s[k] == '\\' && k + 1 < s.Length) // Handle escape sequence
+                if (s[k] == '\\' && k + 1 < s.Length)
                 {
-                    k++; // Skip next char
+                    k++;
                 }
                 else if (s[k] == currentQuoteChar)
                 {
-                    quoteDepth = 0; // End of string literal
+                    quoteDepth = 0;
                 }
             }
-            else // Not inside a string literal
+            else
             {
                 if (s[k] == '"' || s[k] == '\'')
                 {
@@ -301,15 +550,15 @@ internal class ExpressionEvaluator : IDisposable
                 }
                 else if (s[k] == '(' || s[k] == '[' || s[k] == '{') parenDepth++;
                 else if (s[k] == ')' || s[k] == ']' || s[k] == '}') parenDepth--;
-                else if (parenDepth == 0 && s[k] == ch) // Target char found at nesting level 0
+                else if (parenDepth == 0 && s[k] == ch)
                     return k;
             }
         }
-        return -1; // Not found
+        return -1;
     }
 
     /// <summary>
-    /// Applies formatting and alignment to a value.
+    /// Applies formatting and alignment to value.
     /// </summary>
     private string ApplyFormat(object? value, string? alignment, string? format, string originalExpression, DollarSignOptions options)
     {
@@ -325,7 +574,6 @@ internal class ExpressionEvaluator : IDisposable
         }
         else if (value is string sVal)
         {
-            // Unescape {{...}} if they appear in the result of an expression
             if (string.IsNullOrEmpty(format))
             {
                 stringValue = Regex.Replace(sVal, @"\{\{(.*?)\}\}", m => $"{{{m.Groups[1].Value}}}");
@@ -338,11 +586,9 @@ internal class ExpressionEvaluator : IDisposable
 
         if (value == null && !string.IsNullOrEmpty(alignment) && stringValue == null)
         {
-            // Apply alignment to empty string
             return string.Format(culture, $"{{0,{alignment}}}", string.Empty);
         }
 
-        // Use existing string value
         if (stringValue != null)
         {
             if (string.IsNullOrEmpty(alignment) && string.IsNullOrEmpty(format))
@@ -360,7 +606,6 @@ internal class ExpressionEvaluator : IDisposable
 
         try
         {
-            // Use IFormattable if available for best formatting support
             if (valueToFormat is IFormattable formattableValue)
             {
                 string formatted = formattableValue.ToString(format, culture);
@@ -371,7 +616,6 @@ internal class ExpressionEvaluator : IDisposable
                 return formatted;
             }
 
-            // Fall back to standard string.Format
             return string.Format(culture, pattern, valueToFormat);
         }
         catch (FormatException ex)
@@ -383,46 +627,31 @@ internal class ExpressionEvaluator : IDisposable
     }
 
     /// <summary>
-    /// Evaluates a C# script expression against a context object with timeout support.
+    /// Evaluates C# script expression against context object.
     /// </summary>
-    private async Task<object?> EvaluateScriptAsync(string expression, object? context, DollarSignOptions options)
+    private async Task<object?> EvaluateScriptAsync(string expression, EvaluationContext evaluationContext, DollarSignOptions options)
     {
         ScriptRunner<object>? runner;
         string processedExpression = expression;
-        Type globalsTypeForScript;
-        object effectiveGlobals = context ?? new DollarSign.NoParametersContext();
+        Type globalsTypeForScript = typeof(ScriptHost);
+        object effectiveGlobals = evaluationContext.Context;
 
-        Logger.Debug($"[EvaluateScriptAsync START] Original Expr: \"{expression}\", Context: {context?.GetType().Name}");
+        Logger.Debug($"[EvaluateScriptAsync START] Original Expr: \"{expression}\"");
 
-        // Process scripts with global variable types for better type safety
-        if (options.GlobalVariableTypes != null && options.GlobalVariableTypes.Any() && context is ScriptHost scriptHostContext)
+        // Apply syntax rewriting for complex property access
+        if (evaluationContext.GlobalVariableTypes.Any())
         {
             var syntaxTree = CSharpSyntaxTree.ParseText(expression, new CSharpParseOptions(LanguageVersion.Latest, kind: SourceCodeKind.Script));
-            var rewriter = new CastingDictionaryAccessRewriter(options.GlobalVariableTypes);
+            var rewriter = new CastingDictionaryAccessRewriter(evaluationContext.GlobalVariableTypes);
             var newRoot = rewriter.Visit(syntaxTree.GetRoot());
             processedExpression = newRoot.ToFullString();
-            globalsTypeForScript = typeof(ScriptHost);
-            effectiveGlobals = scriptHostContext;
             Logger.Debug($"[EvaluateScriptAsync] Rewritten expression: '{processedExpression}'");
         }
-        else if (context is DictionaryWrapper dw)
-        {
-            globalsTypeForScript = typeof(DictionaryWrapper);
-            effectiveGlobals = dw;
-            Logger.Debug($"[EvaluateScriptAsync] Using DictionaryWrapper. Expression: '{processedExpression}'");
-        }
-        else
-        {
-            globalsTypeForScript = effectiveGlobals.GetType();
-            Logger.Debug($"[EvaluateScriptAsync] Using POCO/NoParams ({globalsTypeForScript.Name}). Expression: '{processedExpression}'");
-        }
 
-        // Generate cache key
         string cacheKey = options.UseCache
             ? $"{globalsTypeForScript.FullName}_{processedExpression}"
             : Guid.NewGuid().ToString();
 
-        // Check cache first if enabled
         if (options.UseCache)
         {
             if (_scriptCache.TryGetValue(cacheKey, out runner))
@@ -440,11 +669,10 @@ internal class ExpressionEvaluator : IDisposable
             runner = null;
         }
 
-        // Compile script if not in cache
         if (runner == null)
         {
             var scriptOptions = ScriptOptions.Default
-                .AddReferences(AssemblyReferenceHelper.GetReferences(effectiveGlobals, options.GlobalVariableTypes?.Values.Select(t => t.Assembly).ToArray()))
+                .AddReferences(AssemblyReferenceHelper.GetReferences(effectiveGlobals, evaluationContext.GlobalVariableTypes.Values.Select(t => t.Assembly).ToArray()))
                 .AddImports(
                     "System",
                     "System.Linq",
@@ -463,7 +691,6 @@ internal class ExpressionEvaluator : IDisposable
                 var script = CSharpScript.Create<object>(processedExpression, scriptOptions, globalsType: globalsTypeForScript);
                 runner = script.CreateDelegate();
 
-                // Cache the compiled script if caching is enabled
                 if (options.UseCache && runner != null)
                 {
                     _scriptCache.GetOrAdd(cacheKey, _ => runner);
@@ -485,12 +712,11 @@ internal class ExpressionEvaluator : IDisposable
         if (runner == null)
         {
             Logger.Error($"Script runner is null after compilation/cache attempt for key: {cacheKey}");
-            throw new DollarSignEngineException($"Failed to create or retrieve a script runner for expression: {processedExpression}");
+            throw new DollarSignEngineException($"Failed to create or retrieve script runner for expression: {processedExpression}");
         }
 
         try
         {
-            // Execute the script with timeout
             using var cts = new CancellationTokenSource(_timeoutMs);
             var result = await runner(effectiveGlobals, cts.Token);
             Logger.Debug($"[EvaluateScriptAsync END] Result: \"{result}\"");
@@ -517,7 +743,6 @@ internal class ExpressionEvaluator : IDisposable
         TypeAccessorFactory.ClearCache();
         TypeNameHelper.ClearCaches();
 
-        // Reset metrics
         Interlocked.Exchange(ref _totalEvaluations, 0);
         Interlocked.Exchange(ref _cacheHits, 0);
 
@@ -547,5 +772,20 @@ internal class ExpressionEvaluator : IDisposable
         }
 
         GC.SuppressFinalize(this);
+    }
+}
+
+/// <summary>
+/// Evaluation context containing script host and variable types.
+/// </summary>
+internal class EvaluationContext
+{
+    public ScriptHost Context { get; }
+    public IDictionary<string, Type> GlobalVariableTypes { get; }
+
+    public EvaluationContext(ScriptHost context, IDictionary<string, Type> globalVariableTypes)
+    {
+        Context = context;
+        GlobalVariableTypes = globalVariableTypes;
     }
 }

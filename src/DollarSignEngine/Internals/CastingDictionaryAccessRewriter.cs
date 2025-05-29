@@ -1,4 +1,4 @@
-﻿using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace DollarSignEngine.Internals;
@@ -252,10 +252,8 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
 
             if (requiresSpecialHandling)
             {
-                // Instead of using indexer access, use direct property name
-                // This transforms: array[index].Property => ((dynamic)array[index]).Property
-
-                // First visit the element access
+                // 수정된 부분: 배열 요소의 프로퍼티 접근을 올바르게 처리
+                // Items[0].Name -> ((dynamic)Items[0]).Name
                 var updatedElementAccess = (ElementAccessExpressionSyntax)Visit(elementAccess);
 
                 // Cast to dynamic
