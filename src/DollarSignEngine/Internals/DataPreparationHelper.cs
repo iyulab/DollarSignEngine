@@ -1,7 +1,7 @@
 namespace DollarSignEngine.Internals;
 
 /// <summary>
-/// Helper methods for processing context data for evaluation.
+/// Helper methods for processing context data for evaluation with enhanced LINQ support.
 /// </summary>
 internal static class DataPreparationHelper
 {
@@ -18,12 +18,42 @@ internal static class DataPreparationHelper
     }
 
     /// <summary>
-    /// Converts object to format more suitable for evaluation.
+    /// Determines if type is a LINQ iterator or deferred execution type.
+    /// </summary>
+    public static bool IsLinqIteratorType(Type? type)
+    {
+        if (type == null) return false;
+
+        var typeName = type.Name;
+        var fullName = type.FullName ?? "";
+
+        return typeName.Contains("Iterator") ||
+               typeName.Contains("Enumerable") ||
+               fullName.Contains("System.Linq") ||
+               (type.IsGenericType && type.GetGenericTypeDefinition().FullName?.Contains("System.Linq") == true);
+    }
+
+    /// <summary>
+    /// Converts object to format more suitable for evaluation with enhanced LINQ handling.
     /// </summary>
     public static object? ConvertToEvalFriendlyObject(object? obj)
     {
         if (obj == null) return null;
         Type type = obj.GetType();
+
+        // Handle LINQ iterator types by materializing them to arrays
+        if (IsLinqIteratorType(type))
+        {
+            if (obj is IEnumerable coll)
+            {
+                var materializedList = new List<object?>();
+                foreach (var item in coll)
+                {
+                    materializedList.Add(ConvertToEvalFriendlyObject(item));
+                }
+                return materializedList.ToArray();
+            }
+        }
 
         if (IsAnonymousType(type))
         {
@@ -45,6 +75,35 @@ internal static class DataPreparationHelper
             Type? elementType = type.GetElementType();
 
             if (elementType == null) return obj;
+
+            // Handle object[] arrays that might contain anonymous types
+            if (elementType == typeof(object))
+            {
+                var convertedItems = new List<object?>(array.Length);
+                bool hasAnonymousTypes = false;
+
+                foreach (var item in array)
+                {
+                    if (item != null && IsAnonymousType(item.GetType()))
+                    {
+                        hasAnonymousTypes = true;
+                        convertedItems.Add(ConvertToEvalFriendlyObject(item));
+                    }
+                    else
+                    {
+                        convertedItems.Add(item);
+                    }
+                }
+
+                // If we found anonymous types, return the converted array
+                if (hasAnonymousTypes)
+                {
+                    return convertedItems.ToArray();
+                }
+
+                // Otherwise return original for better performance
+                return obj;
+            }
 
             if (elementType == typeof(int) ||
                 elementType == typeof(long) ||
@@ -153,14 +212,29 @@ internal static class DataPreparationHelper
             }
         }
 
+        // Handle other IEnumerable types, including LINQ results
         if (obj is IEnumerable enumerable && !(obj is string))
         {
-            var items = new List<object?>();
+            // Check if this might be a LINQ query result that needs materialization
+            if (IsLinqIteratorType(type) ||
+                type.Namespace?.StartsWith("System.Linq") == true ||
+                type.FullName?.Contains("Iterator") == true)
+            {
+                var items = new List<object?>();
+                foreach (var item in enumerable)
+                {
+                    items.Add(ConvertToEvalFriendlyObject(item));
+                }
+                return items.ToArray();
+            }
+
+            // For other IEnumerable types, convert individual items
+            var convertedItems = new List<object?>();
             foreach (var item in enumerable)
             {
-                items.Add(ConvertToEvalFriendlyObject(item));
+                convertedItems.Add(ConvertToEvalFriendlyObject(item));
             }
-            return items;
+            return convertedItems;
         }
 
         return obj;

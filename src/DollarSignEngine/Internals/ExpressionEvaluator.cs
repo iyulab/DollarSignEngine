@@ -9,6 +9,7 @@ namespace DollarSignEngine.Internals;
 
 /// <summary>
 /// Core expression evaluation engine with enhanced security and performance.
+/// Enhanced with better LINQ iterator handling.
 /// </summary>
 internal class ExpressionEvaluator : IDisposable
 {
@@ -54,7 +55,6 @@ internal class ExpressionEvaluator : IDisposable
         ThrowIfDisposed();
         Interlocked.Increment(ref _totalEvaluations);
 
-        // Prepare evaluation context
         var evaluationContext = PrepareEvaluationContext(context, options);
 
         var work = TemplateEscaper.EscapeBlocks(template);
@@ -195,7 +195,7 @@ internal class ExpressionEvaluator : IDisposable
     }
 
     /// <summary>
-    /// Prepares evaluation context from variables and options.
+    /// Prepares evaluation context from variables and options with enhanced LINQ support.
     /// </summary>
     private EvaluationContext PrepareEvaluationContext(object? variables, DollarSignOptions options)
     {
@@ -225,7 +225,7 @@ internal class ExpressionEvaluator : IDisposable
     }
 
     /// <summary>
-    /// Converts object to dictionary with string keys.
+    /// Converts object to dictionary with string keys and enhanced LINQ handling.
     /// </summary>
     private IDictionary<string, object?> ConvertToDictionary(object? obj)
     {
@@ -239,7 +239,7 @@ internal class ExpressionEvaluator : IDisposable
             var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
             foreach (var kvp in dictNullable)
             {
-                newDict[kvp.Key] = ConvertToEvalFriendlyObject(kvp.Value);
+                newDict[kvp.Key] = DataPreparationHelper.ConvertToEvalFriendlyObject(kvp.Value);
             }
             return newDict;
         }
@@ -249,7 +249,7 @@ internal class ExpressionEvaluator : IDisposable
             var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
             foreach (var kvp in dictNonNullable)
             {
-                newDict[kvp.Key] = ConvertToEvalFriendlyObject(kvp.Value);
+                newDict[kvp.Key] = DataPreparationHelper.ConvertToEvalFriendlyObject(kvp.Value);
             }
             return newDict;
         }
@@ -260,7 +260,7 @@ internal class ExpressionEvaluator : IDisposable
             var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
             foreach (var kvp in dynamicDict)
             {
-                newDict[kvp.Key] = ConvertToEvalFriendlyObject(kvp.Value);
+                newDict[kvp.Key] = DataPreparationHelper.ConvertToEvalFriendlyObject(kvp.Value);
             }
             return newDict;
         }
@@ -278,7 +278,7 @@ internal class ExpressionEvaluator : IDisposable
                     foreach (DictionaryEntry entry in dictionary)
                     {
                         string key = entry.Key?.ToString() ?? string.Empty;
-                        newDict[key] = ConvertToEvalFriendlyObject(entry.Value);
+                        newDict[key] = DataPreparationHelper.ConvertToEvalFriendlyObject(entry.Value);
                     }
                     return newDict;
                 }
@@ -291,14 +291,13 @@ internal class ExpressionEvaluator : IDisposable
             foreach (DictionaryEntry entry in nonGenericDict)
             {
                 string key = entry.Key?.ToString() ?? string.Empty;
-                newDict[key] = ConvertToEvalFriendlyObject(entry.Value);
+                newDict[key] = DataPreparationHelper.ConvertToEvalFriendlyObject(entry.Value);
             }
             return newDict;
         }
 
         var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
 
-        // Handle anonymous types specially - convert to dictionary
         if (DataPreparationHelper.IsAnonymousType(obj.GetType()))
         {
             foreach (var property in obj.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
@@ -306,14 +305,12 @@ internal class ExpressionEvaluator : IDisposable
                 if (property.CanRead)
                 {
                     var propValue = property.GetValue(obj);
-                    result[property.Name] = ConvertToEvalFriendlyObject(propValue);
+                    result[property.Name] = DataPreparationHelper.ConvertToEvalFriendlyObject(propValue);
                 }
             }
             return result;
         }
 
-        // For regular objects, extract properties but keep the original object intact
-        // This preserves LINQ and other functionality
         if (obj != null && !(obj is DollarSign.NoParametersContext))
         {
             foreach (var property in obj.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
@@ -321,130 +318,13 @@ internal class ExpressionEvaluator : IDisposable
                 if (property.CanRead)
                 {
                     var propValue = property.GetValue(obj);
-                    // Only convert the property values, not the root object
-                    result[property.Name] = propValue;
+                    // Use the enhanced conversion method that handles LINQ iterators
+                    result[property.Name] = DataPreparationHelper.ConvertToEvalFriendlyObject(propValue);
                 }
             }
         }
 
         return result;
-    }
-
-    /// <summary>
-    /// Converts object to format suitable for evaluation with proper anonymous type handling.
-    /// </summary>
-    private object? ConvertToEvalFriendlyObject(object? obj)
-    {
-        if (obj == null) return null;
-        Type type = obj.GetType();
-
-        // Handle anonymous types by converting to ExpandoObject
-        if (DataPreparationHelper.IsAnonymousType(type))
-        {
-            var expando = new ExpandoObject();
-            var dict = (IDictionary<string, object?>)expando;
-            foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
-            {
-                if (property.CanRead)
-                {
-                    dict[property.Name] = ConvertToEvalFriendlyObject(property.GetValue(obj));
-                }
-            }
-            return expando;
-        }
-
-        // Handle arrays - only convert if they contain anonymous types
-        if (type.IsArray)
-        {
-            var array = (Array)obj;
-            Type? elementType = type.GetElementType();
-
-            if (elementType == null) return obj;
-
-            // Only convert arrays containing anonymous types
-            if (DataPreparationHelper.IsAnonymousType(elementType))
-            {
-                var convertedItems = new List<object?>(array.Length);
-                foreach (var item in array)
-                {
-                    convertedItems.Add(ConvertToEvalFriendlyObject(item));
-                }
-                return convertedItems.ToArray();
-            }
-
-            // For arrays of object type that might contain anonymous types, check each element
-            if (elementType == typeof(object))
-            {
-                bool hasAnonymousTypes = false;
-                foreach (var item in array)
-                {
-                    if (item != null && DataPreparationHelper.IsAnonymousType(item.GetType()))
-                    {
-                        hasAnonymousTypes = true;
-                        break;
-                    }
-                }
-
-                if (hasAnonymousTypes)
-                {
-                    var convertedItems = new List<object?>(array.Length);
-                    foreach (var item in array)
-                    {
-                        convertedItems.Add(ConvertToEvalFriendlyObject(item));
-                    }
-                    return convertedItems.ToArray();
-                }
-            }
-
-            // For all other arrays, return as-is to preserve LINQ functionality
-            return obj;
-        }
-
-        // Handle collections - only convert if they contain anonymous types
-        if (obj is IList list && type.IsGenericType)
-        {
-            Type listType = type.GetGenericTypeDefinition();
-            if (listType == typeof(List<>) || listType == typeof(IList<>))
-            {
-                Type elementType = type.GetGenericArguments()[0];
-
-                // Only convert if element type is anonymous or object (which might contain anonymous)
-                if (DataPreparationHelper.IsAnonymousType(elementType) || elementType == typeof(object))
-                {
-                    var newList = new List<object?>(list.Count);
-                    foreach (var item in list)
-                    {
-                        newList.Add(ConvertToEvalFriendlyObject(item));
-                    }
-                    return newList;
-                }
-            }
-        }
-
-        // Handle dictionaries - always convert for consistency
-        if (obj is IDictionary<string, object?> dictNullable)
-        {
-            var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var kvp in dictNullable)
-            {
-                newDict[kvp.Key] = ConvertToEvalFriendlyObject(kvp.Value);
-            }
-            return newDict;
-        }
-
-        if (obj is IDictionary<string, object> dictNonNullable)
-        {
-            var newDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var kvp in dictNonNullable)
-            {
-                newDict[kvp.Key] = ConvertToEvalFriendlyObject(kvp.Value);
-            }
-            return newDict;
-        }
-
-        // For all other types (including regular classes), return as-is
-        // This preserves LINQ functionality and other object behaviors
-        return obj;
     }
 
     /// <summary>
@@ -638,7 +518,6 @@ internal class ExpressionEvaluator : IDisposable
 
         Logger.Debug($"[EvaluateScriptAsync START] Original Expr: \"{expression}\"");
 
-        // Apply syntax rewriting for complex property access
         if (evaluationContext.GlobalVariableTypes.Any())
         {
             var syntaxTree = CSharpSyntaxTree.ParseText(expression, new CSharpParseOptions(LanguageVersion.Latest, kind: SourceCodeKind.Script));

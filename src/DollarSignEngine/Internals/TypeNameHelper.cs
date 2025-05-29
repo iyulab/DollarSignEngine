@@ -1,24 +1,23 @@
-﻿namespace DollarSignEngine.Internals;
+namespace DollarSignEngine.Internals;
 
 /// <summary>
-/// Helper for type name operations with built-in caching.
+/// Helper for type name operations with built-in caching and enhanced LINQ support.
 /// </summary>
 internal static class TypeNameHelper
 {
-    // Cache for type name conversions
     private static readonly LruCache<Type, string> _typeNameCache =
         new LruCache<Type, string>(1000);
 
-    // Cache for anonymous type detection
     private static readonly LruCache<Type, bool> _anonymousTypeCache =
         new LruCache<Type, bool>(500);
 
-    // Cache for collection type detection
     private static readonly LruCache<Type, bool> _collectionTypeCache =
         new LruCache<Type, bool>(500);
 
-    // Cache for dictionary type detection
     private static readonly LruCache<Type, bool> _dictionaryTypeCache =
+        new LruCache<Type, bool>(500);
+
+    private static readonly LruCache<Type, bool> _linqIteratorTypeCache =
         new LruCache<Type, bool>(500);
 
     /// <summary>
@@ -34,6 +33,27 @@ internal static class TypeNameHelper
             && (t.Name.StartsWith("<>") || t.Name.StartsWith("VB$"))
             && (t.Attributes & TypeAttributes.NotPublic) == TypeAttributes.NotPublic
         );
+    }
+
+    /// <summary>
+    /// Determines if a type is a LINQ iterator or deferred execution type.
+    /// </summary>
+    public static bool IsLinqIteratorType(Type? type)
+    {
+        if (type == null) return false;
+
+        return _linqIteratorTypeCache.GetOrAdd(type, t =>
+        {
+            var typeName = t.Name;
+            var fullName = t.FullName ?? "";
+
+            return typeName.Contains("Iterator") ||
+                   typeName.Contains("Enumerable") ||
+                   fullName.Contains("System.Linq") ||
+                   (t.IsGenericType && t.GetGenericTypeDefinition().FullName?.Contains("System.Linq") == true) ||
+                   t.Assembly.GetName().Name == "System.Linq" ||
+                   (t.IsGenericType && t.GetGenericTypeDefinition().Assembly.GetName().Name == "System.Linq");
+        });
     }
 
     /// <summary>
@@ -87,11 +107,14 @@ internal static class TypeNameHelper
     }
 
     /// <summary>
-    /// Internal method to calculate the parsable type name.
+    /// Internal method to calculate the parsable type name with enhanced LINQ handling.
     /// </summary>
     private static string CalculateParsableTypeName(Type type)
     {
         if (IsAnonymousType(type)) return "dynamic";
+
+        // Handle LINQ iterator types
+        if (IsLinqIteratorType(type)) return "dynamic";
 
         var underlyingType = Nullable.GetUnderlyingType(type);
         if (underlyingType != null)
@@ -107,10 +130,8 @@ internal static class TypeNameHelper
                 int rank = type.GetArrayRank();
                 string commas = rank > 1 ? new string(',', rank - 1) : "";
 
-                // Get element type name
                 string elementTypeName = GetParsableTypeName(elementType);
 
-                // Special case for anonymous types or objects
                 if (IsAnonymousType(elementType) || elementType == typeof(object))
                 {
                     return "dynamic[]";
@@ -120,20 +141,16 @@ internal static class TypeNameHelper
             }
         }
 
-        // Check for dictionary types
         if (IsDictionaryType(type))
         {
-            // Use dynamic for dictionaries to allow property access
             return "dynamic";
         }
 
-        // Handle generic collections
         if (type.IsGenericType)
         {
             var genericTypeDef = type.GetGenericTypeDefinition();
             var genericArgs = type.GetGenericArguments();
 
-            // Handle collection types
             if ((genericTypeDef == typeof(List<>) ||
                 genericTypeDef == typeof(IEnumerable<>) ||
                 genericTypeDef == typeof(ICollection<>) ||
@@ -142,13 +159,11 @@ internal static class TypeNameHelper
             {
                 var elementType = genericArgs[0];
 
-                // Special case for collections with anonymous types
                 if (IsAnonymousType(elementType) || elementType == typeof(object))
                 {
                     return "dynamic";
                 }
 
-                // Standard collection formatting
                 string baseName = genericTypeDef.FullName?.Split('`')[0] ?? genericTypeDef.Name.Split('`')[0];
                 baseName = baseName.Replace('+', '.');
                 var elementTypeName = GetParsableTypeName(elementType);
@@ -156,7 +171,7 @@ internal static class TypeNameHelper
             }
         }
 
-        // Handle primitive types with direct mapping
+        // Handle primitive types
         if (type == typeof(bool)) return "bool";
         if (type == typeof(byte)) return "byte";
         if (type == typeof(sbyte)) return "sbyte";
@@ -193,7 +208,7 @@ internal static class TypeNameHelper
             return $"{baseName}<{string.Join(", ", genericArgs)}>";
         }
 
-        // Default case: use the full name
+        // Default case
         var fullName = type.FullName ?? type.Name;
         return fullName.Replace('+', '.');
     }
@@ -207,6 +222,7 @@ internal static class TypeNameHelper
         _anonymousTypeCache.Clear();
         _collectionTypeCache.Clear();
         _dictionaryTypeCache.Clear();
+        _linqIteratorTypeCache.Clear();
         Logger.Debug("[TypeNameHelper.ClearCaches] All type name caches cleared.");
     }
 }
