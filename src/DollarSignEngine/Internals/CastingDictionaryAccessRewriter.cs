@@ -178,38 +178,61 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
         var newExpression = (ExpressionSyntax)Visit(node.Expression);
         var newArgumentList = (BracketedArgumentListSyntax)Visit(node.ArgumentList);
 
+        Logger.Debug($"[CastingRewriter] VisitElementAccessExpression: {node}");
+
         if (newExpression is IdentifierNameSyntax identifierName &&
             _globalVariableTypes.TryGetValue(identifierName.Identifier.Text, out var collectionType))
         {
+            Logger.Debug($"[CastingRewriter] Found variable: {identifierName.Identifier.Text}, Type: {collectionType.FullName}");
+
             // Handle LINQ iterator types or collections that need dynamic casting
             if (IsLinqIteratorType(collectionType) ||
                 (collectionType.IsArray || IsCollectionType(collectionType)))
             {
                 Type? elementType = GetElementType(collectionType);
+                Logger.Debug($"[CastingRewriter] Element type: {elementType?.FullName ?? "null"}");
 
-                // Cast to dynamic if:
-                // 1. Element type is anonymous, dictionary, or object
-                // 2. Collection type is LINQ iterator
-                // 3. Array of object (which might contain anonymous types)
+                // List<object>의 경우 특별 처리
+                if (elementType == typeof(object) &&
+                    collectionType.IsGenericType &&
+                    collectionType.GetGenericTypeDefinition() == typeof(List<>))
+                {
+                    Logger.Debug("[CastingRewriter] Detected List<object>, applying object cast");
+
+                    var elementAccess = node.Update(newExpression, newArgumentList);
+                    var castExpression = SyntaxFactory.CastExpression(
+                        SyntaxFactory.ParseTypeName("object"),
+                        elementAccess
+                    );
+                    var result = SyntaxFactory.ParenthesizedExpression(castExpression).WithTriviaFrom(node);
+
+                    Logger.Debug($"[CastingRewriter] Transformed to: {result}");
+                    return result;
+                }
+
+                // 다른 경우에만 dynamic 캐스팅
                 if ((elementType != null && (IsAnonymousType(elementType) ||
                                            typeof(System.Dynamic.ExpandoObject).IsAssignableFrom(elementType) ||
-                                           IsDictionaryType(elementType) ||
-                                           elementType == typeof(object))) ||
+                                           IsDictionaryType(elementType))) ||
                     IsLinqIteratorType(collectionType) ||
                     (collectionType.IsArray && collectionType.GetElementType() == typeof(object)))
                 {
-                    var elementAccess = node.Update(newExpression, newArgumentList);
+                    Logger.Debug("[CastingRewriter] Applying dynamic cast");
 
+                    var elementAccess = node.Update(newExpression, newArgumentList);
                     var castExpression = SyntaxFactory.CastExpression(
                         SyntaxFactory.ParseTypeName("dynamic"),
                         elementAccess
                     );
+                    var result = SyntaxFactory.ParenthesizedExpression(castExpression).WithTriviaFrom(node);
 
-                    return SyntaxFactory.ParenthesizedExpression(castExpression).WithTriviaFrom(node);
+                    Logger.Debug($"[CastingRewriter] Transformed to: {result}");
+                    return result;
                 }
             }
         }
 
+        Logger.Debug($"[CastingRewriter] No transformation applied");
         return node.Update(newExpression, newArgumentList);
     }
 
@@ -218,6 +241,9 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
         var newExpression = (ExpressionSyntax)Visit(node.Expression);
         var newName = (SimpleNameSyntax)Visit(node.Name);
 
+        Logger.Debug($"[CastingRewriter] VisitMemberAccessExpression: {node}");
+
+        // 딕셔너리 타입 처리
         if (node.Expression is IdentifierNameSyntax identifierName &&
             _globalVariableTypes.TryGetValue(identifierName.Identifier.Text, out var type) &&
             IsDictionaryType(type))
@@ -240,55 +266,83 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
 
             return elementAccessExpr.WithTriviaFrom(node);
         }
+        // 배열/컬렉션 요소에 대한 멤버 접근 처리
         else if (node.Expression is ElementAccessExpressionSyntax elementAccess)
         {
-            bool requiresSpecialHandling = false;
+            Logger.Debug($"[CastingRewriter] Processing member access on element access: {elementAccess}");
 
             if (elementAccess.Expression is IdentifierNameSyntax collectionIdentifier &&
                 _globalVariableTypes.TryGetValue(collectionIdentifier.Identifier.Text, out var collectionType))
             {
                 Type? elementType = GetElementType(collectionType);
+                Logger.Debug($"[CastingRewriter] Collection: {collectionIdentifier.Identifier.Text}, Type: {collectionType.FullName}, ElementType: {elementType?.FullName}");
 
-                // Check if the collection contains objects that might be anonymous types
+                // List<object>의 경우 리플렉션 기반 속성 접근으로 변경
+                if (elementType == typeof(object) &&
+                    collectionType.IsGenericType &&
+                    collectionType.GetGenericTypeDefinition() == typeof(List<>))
+                {
+                    Logger.Debug("[CastingRewriter] Converting List<object> member access to SafeGetProperty");
+
+                    var updatedElementAccess = (ElementAccessExpressionSyntax)Visit(elementAccess);
+
+                    // ScriptHost.SafeGetProperty 호출로 변환
+                    var safeGetCall = SyntaxFactory.InvocationExpression(
+                        SyntaxFactory.MemberAccessExpression(
+                            SyntaxKind.SimpleMemberAccessExpression,
+                            SyntaxFactory.IdentifierName("ScriptHost"),
+                            SyntaxFactory.IdentifierName("SafeGetProperty")))
+                        .WithArgumentList(
+                            SyntaxFactory.ArgumentList(
+                                SyntaxFactory.SeparatedList(new[]
+                                {
+                                SyntaxFactory.Argument(updatedElementAccess),
+                                SyntaxFactory.Argument(
+                                    SyntaxFactory.LiteralExpression(
+                                        SyntaxKind.StringLiteralExpression,
+                                        SyntaxFactory.Literal(node.Name.Identifier.Text)))
+                                })));
+
+                    Logger.Debug($"[CastingRewriter] Transformed to: {safeGetCall}");
+                    return safeGetCall.WithTriviaFrom(node);
+                }
+
+                // 다른 복잡한 타입들 (익명 타입, 딕셔너리, ExpandoObject 등)
                 if (elementType != null && (IsAnonymousType(elementType) ||
                                           IsDictionaryType(elementType) ||
-                                          elementType == typeof(object)) ||
-                    IsLinqIteratorType(collectionType))
+                                          typeof(System.Dynamic.ExpandoObject).IsAssignableFrom(elementType)) ||
+                    IsLinqIteratorType(collectionType) ||
+                    (collectionType.IsArray && collectionType.GetElementType() == typeof(object)))
                 {
-                    requiresSpecialHandling = true;
+                    Logger.Debug("[CastingRewriter] Applying dynamic cast for member access");
+
+                    var updatedElementAccess = (ElementAccessExpressionSyntax)Visit(elementAccess);
+
+                    var castExpression = SyntaxFactory.CastExpression(
+                        SyntaxFactory.ParseTypeName("dynamic"),
+                        updatedElementAccess
+                    );
+
+                    var parenthesizedCast = SyntaxFactory.ParenthesizedExpression(castExpression);
+
+                    var memberAccess = SyntaxFactory.MemberAccessExpression(
+                        SyntaxKind.SimpleMemberAccessExpression,
+                        parenthesizedCast,
+                        newName
+                    );
+
+                    Logger.Debug($"[CastingRewriter] Transformed to: {memberAccess}");
+                    return memberAccess.WithTriviaFrom(node);
                 }
-                // Special case: object[] might contain anonymous types
-                else if (collectionType.IsArray && collectionType.GetElementType() == typeof(object))
-                {
-                    requiresSpecialHandling = true;
-                }
-            }
-
-            if (requiresSpecialHandling)
-            {
-                var updatedElementAccess = (ElementAccessExpressionSyntax)Visit(elementAccess);
-
-                var castExpression = SyntaxFactory.CastExpression(
-                    SyntaxFactory.ParseTypeName("dynamic"),
-                    updatedElementAccess
-                );
-
-                var parenthesizedCast = SyntaxFactory.ParenthesizedExpression(castExpression);
-
-                var memberAccess = SyntaxFactory.MemberAccessExpression(
-                    SyntaxKind.SimpleMemberAccessExpression,
-                    parenthesizedCast,
-                    newName
-                );
-
-                return memberAccess.WithTriviaFrom(node);
             }
         }
+        // 중첩된 딕셔너리 접근 처리 (예: dict.prop1.prop2)
         else if (IsNestedDictionaryAccess(node))
         {
             return TransformNestedPropertyPath(node);
         }
 
+        Logger.Debug($"[CastingRewriter] No transformation applied for member access");
         return node.Update(newExpression, node.OperatorToken, newName);
     }
 
@@ -351,7 +405,7 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
 
         return elementAccessExpr.WithTriviaFrom(node);
     }
-
+    
     public override SyntaxNode? VisitIdentifierName(IdentifierNameSyntax node)
     {
         string identifierName = node.Identifier.Text;

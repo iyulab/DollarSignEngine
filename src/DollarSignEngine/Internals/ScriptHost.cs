@@ -21,6 +21,52 @@ public class ScriptHost
     }
 
     /// <summary>
+    /// 안전한 속성 접근을 위한 인스턴스 메서드 (스크립트에서 쉽게 접근 가능)
+    /// </summary>
+    public object? SafeGet(object? obj, string propertyName)
+    {
+        return SafeGetProperty(obj, propertyName);
+    }
+
+    /// <summary>
+    /// 안전한 속성 접근 메서드
+    /// </summary>
+    public static object? SafeGetProperty(object? obj, string propertyName)
+    {
+        if (obj == null) return null;
+
+        try
+        {
+            // 일반 객체인 경우 리플렉션 사용
+            var type = obj.GetType();
+            var property = type.GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+
+            if (property != null && property.CanRead)
+            {
+                return property.GetValue(obj);
+            }
+
+            // 딕셔너리인 경우
+            if (obj is IDictionary<string, object> dict && dict.ContainsKey(propertyName))
+            {
+                return dict[propertyName];
+            }
+
+            if (obj is IDictionary<string, object?> dictNullable && dictNullable.ContainsKey(propertyName))
+            {
+                return dictNullable[propertyName];
+            }
+
+            // 동적 객체 처리는 복잡하므로 일단 제외
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Special dictionary implementation that handles null variable access gracefully.
     /// When a variable is not found, it returns null instead of throwing an exception.
     /// This mimics C# string interpolation behavior.

@@ -560,7 +560,8 @@ internal class ExpressionEvaluator : IDisposable
                     "System.Math",
                     "System.Globalization",
                     "System.Dynamic",
-                    "DollarSignEngine"
+                    "DollarSignEngine",
+                    "DollarSignEngine.Internals"
                 );
 
             Logger.Debug($"[EvaluateScriptAsync] Compiling expression: '{processedExpression}' with globalsType: '{globalsTypeForScript.FullName}'");
