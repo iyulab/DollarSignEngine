@@ -1,8 +1,11 @@
 name: .NET Build and NuGet Publish
 on:
+  workflow_dispatch:
   push:
     branches: [ "main" ]
     tags: [ "v*" ]
+    paths:
+      - 'src/Directory.Build.props'
   pull_request:
     branches: [ "main" ]
 env:
