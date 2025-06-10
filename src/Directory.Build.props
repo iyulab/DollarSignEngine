@@ -15,6 +15,7 @@
     <PackageIconUrl>https://raw.githubusercontent.com/iyulab-rnd/public/main/images/iyulab_128.png</PackageIconUrl>
     <PackageTags>Dynamic Expression, String Interpolation, Runtime Evaluation, Scripting, Dynamic Code, Expression Engine</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
   <ItemGroup>
     <None Include="../logo.png" Pack="true" PackagePath="" />
