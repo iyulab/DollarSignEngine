@@ -1,5 +1,11 @@
 # DollarSignEngine
 
+[![NuGet Version](https://img.shields.io/nuget/v/DollarSignEngine.svg)](https://www.nuget.org/packages/DollarSignEngine)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/DollarSignEngine.svg)](https://www.nuget.org/packages/DollarSignEngine)
+[![Build Status](https://github.com/iyulab/DollarSignEngine/workflows/.NET%20Build,%20Test%20&%20Publish/badge.svg)](https://github.com/iyulab/DollarSignEngine/actions)
+[![License](https://img.shields.io/github/license/iyulab/DollarSignEngine.svg)](https://github.com/iyulab/DollarSignEngine/blob/main/LICENSE)
+[![.NET Compatibility](https://img.shields.io/badge/.NET-Standard%202.1%20|%20.NET%205%2B-blue.svg)](https://github.com/iyulab/DollarSignEngine)
+
 Dynamically evaluate and interpolate C# expressions at runtime with ease, leveraging the power of the Roslyn compiler.
 
 ## Introduction
