@@ -28,7 +28,7 @@ The DollarSignEngine is a robust C# library designed to simplify the process of 
 - **Method & LINQ Support:** Call methods on objects and use LINQ expressions within interpolated strings.
 - **Format Specifiers & Alignment:** Full support for C# format specifiers and alignment in interpolated expressions.
 - **Custom Variable Resolution:** Provide custom variable resolvers for advanced use cases.
-- **Multiple Syntax Options:** Support for both standard C# interpolation `{expression}` and dollar-sign `${expression}` syntax.
+- **Multiple Syntax Options:** Support for both standard C# interpolation `{expression}` and dollar-sign `${expression}` syntax for mixed content templates.
 - **Comprehensive Error Handling:** Detailed exceptions with helpful error messages and suggestions for common issues.
 - **Expression Caching:** Compiled expressions are cached for improved performance with repeated evaluations.
 - **Security Validation:** Built-in expression validation with configurable security levels.
@@ -63,6 +63,13 @@ Console.WriteLine(result); // Outputs: Hello, John!
 var parameters = new Dictionary<string, object?> { { "name", "John" } };
 var result = await DollarSign.EvalAsync("Hello, {name}!", parameters);
 Console.WriteLine(result); // Outputs: Hello, John!
+
+// Using dollar sign syntax for mixed content (JSON templates, etc.)
+var options = new DollarSignOptions { SupportDollarSignSyntax = true };
+var user = new { name = "Alice", age = 30 };
+var jsonTemplate = "{ \"user\": { \"name\": \"{name}\", \"age\": ${age} } }";
+var result = await DollarSign.EvalAsync(jsonTemplate, user, options);
+Console.WriteLine(result); // Outputs: { "user": { "name": "{name}", "age": 30 } }
 ```
 
 ### Using Custom Objects
@@ -192,25 +199,39 @@ var result = await DollarSign.EvalAsync("Theme: {settings[\"Theme\"]}, Font Size
 Console.WriteLine(result); // Outputs: Theme: Dark, Font Size: 12
 ```
 
-### Dollar Sign Syntax
+### Dollar Sign Syntax (Commonly Used)
+
+Dollar sign syntax is frequently used when working with templates that contain literal curly braces, such as JSON, XML, or other structured formats.
 
 ```csharp
-// When working with text that contains literal curly braces (like JSON),
-// enable dollar sign syntax to specify which parts should be interpolated
+// Enable dollar sign syntax for selective interpolation
 var options = new DollarSignOptions { SupportDollarSignSyntax = true };
+var user = new { name = "Alice", age = 30, isActive = true };
 
-var user = new { name = "Alice", age = 30 };
+// Common use case: JSON templates with mixed literal and interpolated values
+var jsonTemplate = """
+{
+  "user": {
+    "name": "{name}",           // Literal curly braces (not interpolated)
+    "age": ${age},              // Dollar syntax (interpolated)
+    "status": ${isActive ? "\"active\"" : "\"inactive\""},
+    "metadata": {
+      "created": "{created_date}",  // Literal (placeholder for later)
+      "updated": "${DateTime.Now:yyyy-MM-dd}"  // Interpolated
+    }
+  }
+}
+""";
 
-// With dollar sign syntax enabled, only ${...} is interpolated
-var jsonTemplate = "{ \"user\": { \"name\": \"{name}\", \"age\": ${age} } }";
 var result = await DollarSign.EvalAsync(jsonTemplate, user, options);
-Console.WriteLine(result); 
-// Outputs: { "user": { "name": "{name}", "age": 30 } }
+Console.WriteLine(result);
+// Outputs: { "user": { "name": "{name}", "age": 30, "status": "active", ... } }
 
-// In standard mode (default), all {...} expressions are interpolated
-var standardResult = await DollarSign.EvalAsync("{ \"user\": { \"name\": \"{name}\", \"age\": {age} } }", user);
-Console.WriteLine(standardResult); 
-// Outputs: { "user": { "name": "Alice", "age": 30 } }
+// Configuration files, SQL templates, and document generation
+var configTemplate = "server={server_name}&port=${port}&timeout=${timeout}";
+var config = new { port = 5432, timeout = 30 };
+var connectionString = await DollarSign.EvalAsync(configTemplate, config, options);
+// Outputs: server={server_name}&port=5432&timeout=30
 ```
 
 ## Method Calls and LINQ: Requirements and Limitations
@@ -264,9 +285,9 @@ var options = new DollarSignOptions
     // The culture to use for formatting. If null, the current culture is used.
     CultureInfo = new CultureInfo("en-US"),
 
-    // Whether to support dollar sign syntax in templates.
+    // Whether to support dollar sign syntax in templates (commonly used).
     // When enabled, {expression} is treated as literal text and ${expression} is evaluated.
-    // Defaults to false.
+    // Essential for JSON templates, config files, and mixed content. Defaults to false.
     SupportDollarSignSyntax = true,
 
     // Security level for expression validation (Strict, Moderate, Permissive)
