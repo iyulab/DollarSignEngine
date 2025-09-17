@@ -441,7 +441,7 @@ internal class CastingDictionaryAccessRewriter : CSharpSyntaxRewriter
             else if (parent is TypeConstraintSyntax tcs && tcs.Type == node) skipRewrite = true;
             else if (parent is PredefinedTypeSyntax) skipRewrite = true;
             else if (parent is CrefSyntax) skipRewrite = true;
-            else if (parent is UsingDirectiveSyntax uds && (uds.Name.ToString() == identifierName || uds.Name.ToString().EndsWith("." + identifierName))) skipRewrite = true;
+            else if (parent is UsingDirectiveSyntax uds && (uds.Name?.ToString() == identifierName || uds.Name?.ToString().EndsWith("." + identifierName) == true)) skipRewrite = true;
             else if (parent is QualifiedNameSyntax qnsParent && qnsParent.Left.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>().Any(id => id == node)) skipRewrite = true;
 
             if (parent is ElementAccessExpressionSyntax eas && eas.Expression == node)

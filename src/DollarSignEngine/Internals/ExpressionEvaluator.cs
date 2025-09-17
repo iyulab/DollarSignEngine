@@ -128,7 +128,9 @@ internal class ExpressionEvaluator : IDisposable
                         }
                         else if (SimplePropertyPathRegex.IsMatch(finalExpr) &&
                                 !(evaluationContext.Context is ScriptHost) &&
+#pragma warning disable CS0184 // The given expression is never of the provided type
                                 !(evaluationContext.Context is DictionaryWrapper) &&
+#pragma warning restore CS0184
                                 finalExpr.Contains('.'))
                         {
                             value = PropertyResolver.ResolveNestedProperty(evaluationContext.Context, finalExpr);

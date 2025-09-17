@@ -124,8 +124,9 @@ public static class DollarSign
             catch (Exception ex)
             {
                 Logger.Warning($"Error evaluating template '{kvp.Key}': {ex.Message}");
-                return new KeyValuePair<string, string>(kvp.Key,
-                    options?.ThrowOnError == true ? throw ex : string.Empty);
+                if (options?.ThrowOnError == true)
+                    throw;
+                return new KeyValuePair<string, string>(kvp.Key, string.Empty);
             }
         });
 
