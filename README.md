@@ -23,8 +23,11 @@ The DollarSignEngine is a robust C# library designed to simplify the process of 
 - **Format Specifiers & Alignment:** Full support for C# format specifiers and alignment in interpolated expressions.
 - **Custom Variable Resolution:** Provide custom variable resolvers for advanced use cases.
 - **Multiple Syntax Options:** Support for both standard C# interpolation `{expression}` and dollar-sign `${expression}` syntax.
-- **Comprehensive Error Handling:** Provides detailed exceptions for compilation and runtime errors to ease debugging.
+- **Comprehensive Error Handling:** Detailed exceptions with helpful error messages and suggestions for common issues.
 - **Expression Caching:** Compiled expressions are cached for improved performance with repeated evaluations.
+- **Security Validation:** Built-in expression validation with configurable security levels.
+- **Multi-Framework Support:** Compatible with .NET Standard 2.1, .NET 5, 6, 7, 8, and 9.
+- **Performance Monitoring:** Built-in metrics for cache hit rates and evaluation performance.
 
 ## Installation
 
@@ -242,68 +245,97 @@ var options = new DollarSignOptions
 {
     // Whether to cache compiled expressions. Defaults to true.
     UseCache = true,
-    
+
     // Whether to throw exceptions on errors during evaluation. Defaults to false.
     ThrowOnError = false,
-    
+
     // Custom variable resolver function.
     VariableResolver = variableName => /* Return value for variable */,
-    
+
     // Custom error handler function.
     ErrorHandler = (expression, exception) => /* Return replacement text for errors */,
-    
+
     // The culture to use for formatting. If null, the current culture is used.
     CultureInfo = new CultureInfo("en-US"),
-    
+
     // Whether to support dollar sign syntax in templates.
     // When enabled, {expression} is treated as literal text and ${expression} is evaluated.
     // Defaults to false.
-    SupportDollarSignSyntax = true
+    SupportDollarSignSyntax = true,
+
+    // Security level for expression validation (Strict, Moderate, Permissive)
+    SecurityLevel = SecurityLevel.Moderate,
+
+    // Maximum execution time for expressions in milliseconds
+    TimeoutMs = 5000,
+
+    // Cache configuration
+    CacheSize = 1000,
+    CacheTtl = TimeSpan.FromHours(1)
 };
 ```
 
-You can also use the static helper methods to create options:
+You can also use the fluent configuration methods:
 
 ```csharp
 // Default options
 var options = DollarSignOptions.Default;
 
-// Options with a specific variable resolver
-var resolverOptions = DollarSignOptions.WithResolver(name => /* Resolve variable */);
+// Chained configuration
+var secureOptions = DollarSignOptions.Default
+    .WithStrictSecurity()
+    .WithTimeout(TimeSpan.FromSeconds(2))
+    .WithCache(500, TimeSpan.FromMinutes(30));
 
-// Options with error handling
-var errorOptions = DollarSignOptions.WithErrorHandler((expr, ex) => /* Handle error */);
+// Pre-configured options for common scenarios
+var productionOptions = DollarSignOptions.Default.OptimizedForProduction();
+var performanceOptions = DollarSignOptions.Default.OptimizedForPerformance();
+var securityOptions = DollarSignOptions.Default.OptimizedForSecurity();
 
-// Options that throw exceptions on errors
-var throwingOptions = DollarSignOptions.Throwing();
-
-// Options with dollar sign syntax support
-var dollarOptions = DollarSignOptions.WithDollarSignSyntax();
-
-// Options with a specific culture
-var cultureOptions = DollarSignOptions.WithCulture(new CultureInfo("fr-FR"));
+// Custom configuration
+var customOptions = DollarSignOptions.Create(opts =>
+{
+    opts.SecurityLevel = SecurityLevel.Strict;
+    opts.TimeoutMs = 1000;
+    opts.ThrowOnError = true;
+});
 ```
 
 ## Error Handling
 
-The library provides exceptions for handling errors during expression evaluation:
+The library provides detailed exceptions for different types of errors:
 
 ```csharp
 try
 {
-    var result = await DollarSign.EvalAsync("{nonExistentVariable + 1}", null, 
+    var result = await DollarSign.EvalAsync("{nonExistentVariable + 1}", null,
         new DollarSignOptions { ThrowOnError = true });
 }
-catch (DollarSignEngineException ex)
+catch (VariableResolutionException ex)
 {
-    Console.WriteLine($"General error: {ex.Message}");
-    // Handle the error...
+    Console.WriteLine($"Variable '{ex.VariableName}' not found");
+    Console.WriteLine($"Available variables: {string.Join(", ", ex.AvailableVariables)}");
+    // Provides suggestions for similar variable names
+}
+catch (ExpressionValidationException ex)
+{
+    Console.WriteLine($"Security validation failed: {ex.Message}");
+    Console.WriteLine($"Expression: {ex.Expression}");
+    if (ex.Suggestion != null)
+        Console.WriteLine($"Suggestion: {ex.Suggestion}");
+}
+catch (ExpressionTimeoutException ex)
+{
+    Console.WriteLine($"Expression timed out after {ex.Timeout}: {ex.Expression}");
 }
 catch (CompilationException ex)
 {
     Console.WriteLine($"Compilation error: {ex.Message}");
-    Console.WriteLine($"Error details: {ex.ErrorDetails}");
-    // Handle compilation error...
+    Console.WriteLine($"Details: {ex.ErrorDetails}");
+}
+catch (DollarSignEngineException ex)
+{
+    Console.WriteLine($"General error: {ex.Message}");
 }
 ```
 
@@ -320,12 +352,46 @@ var parameters = new Dictionary<string, object?> { { "value", 42 } };
 var result = DollarSign.Eval("The answer is {value}.", parameters);
 ```
 
-## Performance Considerations
+## Performance and Security
 
-- Compiled expressions are cached to improve performance for repeated calls with `UseCache = true` (default)
-- Use the `ClearCache()` method to free memory if needed:
+### Performance Features
+
+- **Expression Caching**: Compiled expressions are cached automatically for improved performance
+- **Performance Metrics**: Monitor cache hit rates and evaluation performance:
+  ```csharp
+  var (totalEvaluations, cacheHits, hitRate) = DollarSign.GetMetrics();
+  Console.WriteLine($"Cache hit rate: {hitRate:P2}");
+  ```
+- **Parallel Evaluation**: Evaluate multiple templates concurrently:
+  ```csharp
+  var templates = new Dictionary<string, string>
+  {
+      ["greeting"] = "Hello, {name}!",
+      ["farewell"] = "Goodbye, {name}!"
+  };
+  var results = await DollarSign.EvalManyAsync(templates, new { name = "World" });
+  ```
+
+### Security Features
+
+- **Expression Validation**: Built-in validation prevents dangerous operations
+- **Configurable Security Levels**: Choose from Strict, Moderate, or Permissive validation
+- **Timeout Protection**: Expressions are automatically terminated if they exceed the configured timeout
+- **Resource Limits**: Configurable limits on expression complexity and execution time
+
+### Best Practices
+
+- Use expression caching for repeated evaluations of the same template
+- Consider security implications when allowing user-provided expressions
+- Use strongly-typed objects for better performance with method calls
+- Monitor performance metrics in production environments
+- Clear the cache periodically if memory usage becomes a concern:
   ```csharp
   DollarSign.ClearCache();
   ```
-- For templates that are evaluated many times with different parameters, consider reusing the same template string
-  - Method calls and LINQ queries are more resource-intensive to compile than simple property access
+
+## Framework Compatibility
+
+- **.NET Standard 2.1** - Compatible with .NET Framework 4.6.1+, .NET Core 2.1+
+- **.NET 5, 6, 7, 8, 9** - Full support for modern .NET versions
+- **Cross-platform** - Works on Windows, Linux, and macOS

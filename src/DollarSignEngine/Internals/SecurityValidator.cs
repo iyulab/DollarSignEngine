@@ -5,7 +5,7 @@ namespace DollarSignEngine.Internals;
 /// <summary>
 /// Provides security validation for expressions to prevent dangerous code execution.
 /// </summary>
-internal static class SecurityValidator
+public static class SecurityValidator
 {
     // Dangerous namespaces and types that should be blocked
     private static readonly HashSet<string> DangerousKeywords = new(StringComparer.OrdinalIgnoreCase)
